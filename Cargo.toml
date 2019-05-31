@@ -1,0 +1,7 @@
+[package]
+name = "vim-lsc"
+version = "0.1.0"
+authors = ["Unreal Hoang <unrealhoang@gmail.com>"]
+edition = "2018"
+
+[dependencies]
