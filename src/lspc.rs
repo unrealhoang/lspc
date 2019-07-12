@@ -1,2 +1,1 @@
-struct Lspc {
-}
+struct Lspc {}
