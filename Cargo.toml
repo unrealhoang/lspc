@@ -7,6 +7,9 @@ edition = "2018"
 [dependencies]
 serde = { version = "1.0.83", features = ["derive"] }
 crossbeam = "*"
+rmpv = { version = "*", features = ["with-serde"] }
+rmp-serde = "*"
 url_serde = "0.2.0"
+serde_json = "*"
+log = "*"
 lsp-types = { version = "0.57.1", features = ["proposed"] }
-neovim-lib = "0.6.1"
