@@ -2,7 +2,6 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::thread::{self, JoinHandle};
 
-use crossbeam;
 use crossbeam::channel::{self, Receiver, Sender};
 use rmp_serde as rmps;
 use rmp_serde::{Deserializer, Serializer};
@@ -64,10 +63,7 @@ impl Serialize for RpcMessage {
                 seq.serialize_element(&Value::from(result.clone()))?;
                 seq.end()
             }
-            RpcNotification {
-                method,
-                params,
-            } => {
+            RpcNotification { method, params } => {
                 let mut seq = serializer.serialize_seq(Some(3))?;
                 seq.serialize_element(&Value::from(2))?;
                 seq.serialize_element(&Value::from(method.clone()))?;
@@ -136,7 +132,10 @@ impl<'de> Visitor<'de> for RpcVisitor {
 
             Ok(RpcNotification { method, params })
         } else {
-            Err(de::Error::invalid_value(de::Unexpected::Other("invalid tag"), &self))
+            Err(de::Error::invalid_value(
+                de::Unexpected::Other("invalid tag"),
+                &self,
+            ))
         }
     }
 }
@@ -160,7 +159,7 @@ struct Client {
 }
 
 impl Client {
-    fn new<R, W>(mut reader: R, mut writer: W) -> (Self, Receiver<RpcMessage>)
+    fn new<R, W>(reader: R, mut writer: W) -> (Self, Receiver<RpcMessage>)
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,
@@ -188,12 +187,15 @@ impl Client {
 
         let msgid_counter = 0;
 
-        (Client {
-            tx,
-            tx_thread,
-            rx_thread,
-            msgid_counter,
-        }, rx)
+        (
+            Client {
+                tx,
+                tx_thread,
+                rx_thread,
+                msgid_counter,
+            },
+            rx,
+        )
     }
 
     fn send_request(&mut self, method: &str, params: Vec<Value>) {
@@ -207,8 +209,8 @@ impl Client {
     }
 
     fn stop(mut self) {
-      self.tx_thread.join().unwrap();
-      self.rx_thread.join().unwrap();
+        self.tx_thread.join().unwrap();
+        self.rx_thread.join().unwrap();
     }
 }
 
@@ -224,8 +226,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         vec!["echo 'hello from the other side'".into()],
                     );
                 }
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
     Ok(())

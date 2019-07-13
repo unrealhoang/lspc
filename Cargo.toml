@@ -10,4 +10,6 @@ crossbeam = "*"
 rmpv = { version = "*", features = ["with-serde"] }
 rmp-serde = "*"
 url_serde = "0.2.0"
+serde_json = "*"
+log = "*"
 lsp-types = { version = "0.57.1", features = ["proposed"] }
