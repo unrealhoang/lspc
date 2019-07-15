@@ -1,34 +1,35 @@
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
-use lsp_types::{notification::Notification, request::Request};
-use serde::{Deserialize, Serialize};
-use serde_json::{from_str, from_value, to_string, to_value, Value};
+use serde::{Serialize, Deserialize};
+use serde_json::{Value, from_str, to_string, from_value, to_value};
 
-use super::Result;
+use lsp_types::{notification::{Exit, Notification}, request::Request};
+
+use crate::rpc::{Message, Result};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum RawMessage {
+pub enum LspMessage {
     Request(RawRequest),
     Notification(RawNotification),
     Response(RawResponse),
 }
 
-impl From<RawRequest> for RawMessage {
-    fn from(raw: RawRequest) -> RawMessage {
-        RawMessage::Request(raw)
+impl From<RawRequest> for LspMessage {
+    fn from(raw: RawRequest) -> LspMessage {
+        LspMessage::Request(raw)
     }
 }
 
-impl From<RawNotification> for RawMessage {
-    fn from(raw: RawNotification) -> RawMessage {
-        RawMessage::Notification(raw)
+impl From<RawNotification> for LspMessage {
+    fn from(raw: RawNotification) -> LspMessage {
+        LspMessage::Notification(raw)
     }
 }
 
-impl From<RawResponse> for RawMessage {
-    fn from(raw: RawResponse) -> RawMessage {
-        RawMessage::Response(raw)
+impl From<RawResponse> for LspMessage {
+    fn from(raw: RawResponse) -> LspMessage {
+        LspMessage::Response(raw)
     }
 }
 
@@ -81,8 +82,8 @@ pub struct RawNotification {
     pub params: Value,
 }
 
-impl RawMessage {
-    pub fn read(r: &mut impl BufRead) -> Result<Option<RawMessage>> {
+impl Message for LspMessage {
+    fn read(r: &mut impl BufRead) -> Result<Option<LspMessage>> {
         let text = match read_msg_text(r)? {
             None => return Ok(None),
             Some(text) => text,
@@ -90,12 +91,13 @@ impl RawMessage {
         let msg = from_str(&text)?;
         Ok(Some(msg))
     }
-    pub fn write(self, w: &mut impl Write) -> Result<()> {
+
+    fn write(self, w: &mut impl Write) -> Result<()> {
         #[derive(Serialize)]
         struct JsonRpc {
             jsonrpc: &'static str,
             #[serde(flatten)]
-            msg: RawMessage,
+            msg: LspMessage,
         }
         let text = to_string(&JsonRpc {
             jsonrpc: "2.0",
@@ -103,6 +105,13 @@ impl RawMessage {
         })?;
         write_msg_text(w, &text)?;
         Ok(())
+    }
+
+    fn is_exit(&self) -> bool {
+        match self {
+            LspMessage::Notification(n) => n.is::<Exit>(),
+            _ => false,
+        }
     }
 }
 
