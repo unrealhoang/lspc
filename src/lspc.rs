@@ -1,16 +1,16 @@
 mod lsp_msg;
 
 use std::{
+    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    process::{Stdio, Command}
 };
 
 use serde_json::{to_value, Value};
 
 use crossbeam::channel::{bounded, Receiver, Sender};
 
-use lsp_msg::{LspMessage, RawRequest};
 use crate::rpc;
+use lsp_msg::{LspMessage, RawRequest};
 
 use lazy_static::lazy_static;
 
@@ -28,7 +28,6 @@ struct LspClients {
     clients: Vec<LspClient>,
 }
 
-
 impl LspClient {
     fn new(name: &str, command: &str, args: Vec<String>) -> rpc::Result<Self> {
         let child_process = Command::new(command)
@@ -40,10 +39,7 @@ impl LspClient {
         let child_stdout = child_process.stdout.unwrap();
         let child_stdin = child_process.stdin.unwrap();
 
-        let client = rpc::Client::<LspMessage>::new(
-            move || { child_stdout },
-            move || { child_stdin }
-        )?;
+        let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin)?;
 
         let capabilities = lsp_types::ClientCapabilities {
             workspace: None,
@@ -66,7 +62,10 @@ impl LspClient {
             method: "".into(),
             params: to_value(init_params)?,
         };
-        client.sender.send(LspMessage::Request(init_request)).unwrap();
+        client
+            .sender
+            .send(LspMessage::Request(init_request))
+            .unwrap();
 
         Ok(LspClient {
             name: name.into(),
@@ -81,6 +80,9 @@ impl LspClient {
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
         let request = RawRequest { id, method, params };
 
-        self.rpc_client.sender.send(LspMessage::Request(request)).unwrap();
+        self.rpc_client
+            .sender
+            .send(LspMessage::Request(request))
+            .unwrap();
     }
 }

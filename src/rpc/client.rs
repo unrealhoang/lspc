@@ -1,5 +1,5 @@
 use std::{
-    io::{BufReader, Read, Write, BufRead},
+    io::{BufRead, BufReader, Read, Write},
     thread,
 };
 
@@ -35,7 +35,7 @@ impl Threads {
 #[derive(Debug)]
 pub struct Client<M>
 where
-    M: Message
+    M: Message,
 {
     pub sender: Sender<M>,
     pub receiver: Receiver<M>,
@@ -50,7 +50,7 @@ impl<M: Message> Client<M> {
         R: Read + Sized,
         W: Write + Sized,
         RF: Send + 'static,
-        WF: Send + 'static
+        WF: Send + 'static,
     {
         let (writer_sender, writer_receiver) = bounded::<M>(16);
         let writer = thread::spawn(move || {

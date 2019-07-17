@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io::{Write, BufRead};
+use std::io::{BufRead, Write};
 
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -27,7 +27,7 @@ impl Message for NvimMsg {
     fn is_exit(&self) -> bool {
         match self {
             NvimMsg::RpcNotification { method, .. } => method == "exit",
-            _ => false
+            _ => false,
         }
     }
 }

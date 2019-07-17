@@ -1,9 +1,12 @@
 use std::io::{BufRead, Read, Write};
 
-use serde::{Serialize, Deserialize};
-use serde_json::{Value, from_str, to_string, from_value, to_value};
+use serde::{Deserialize, Serialize};
+use serde_json::{from_str, from_value, to_string, to_value, Value};
 
-use lsp_types::{notification::{Exit, Notification}, request::Request};
+use lsp_types::{
+    notification::{Exit, Notification},
+    request::Request,
+};
 
 use crate::rpc::{Message, Result};
 
