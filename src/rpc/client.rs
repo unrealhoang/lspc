@@ -43,15 +43,18 @@ where
 }
 
 impl<M: Message> Client<M> {
-    pub fn new<R, W>(io_reader: R, mut io_writer: W) -> Result<Self>
+    pub fn new<RF, WF, R, W>(get_reader: RF, get_writer: WF) -> Result<Self>
     where
-        R: Read + Send + 'static,
-        W: Write + Send + 'static,
+        RF: FnOnce() -> R,
+        WF: FnOnce() -> W,
+        R: Read + Sized,
+        W: Write + Sized,
+        RF: Send + 'static,
+        WF: Send + 'static
     {
         let (writer_sender, writer_receiver) = bounded::<M>(16);
-        let (reader_sender, reader_receiver) = bounded::<M>(16);
-
         let writer = thread::spawn(move || {
+            let mut io_writer = get_writer();
             writer_receiver
                 .into_iter()
                 .try_for_each(|msg| msg.write(&mut io_writer))?;
@@ -60,6 +63,7 @@ impl<M: Message> Client<M> {
 
         let (reader_sender, reader_receiver) = bounded::<M>(16);
         let reader = thread::spawn(move || {
+            let io_reader = get_reader();
             let mut buf_read = BufReader::new(io_reader);
             while let Some(msg) = M::read(&mut buf_read)? {
                 let is_exit = msg.is_exit();
@@ -82,7 +86,7 @@ impl<M: Message> Client<M> {
         Ok(client)
     }
 
-    fn close(mut self) {
-        self.threads.join();
+    fn close(self) -> Result<()> {
+        self.threads.join()
     }
 }

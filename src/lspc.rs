@@ -37,9 +37,12 @@ impl LspClient {
             .stdout(Stdio::piped())
             .spawn()?;
 
+        let child_stdout = child_process.stdout.unwrap();
+        let child_stdin = child_process.stdin.unwrap();
+
         let client = rpc::Client::<LspMessage>::new(
-            child_process.stdout.unwrap(),
-            child_process.stdin.unwrap()
+            move || { child_stdout },
+            move || { child_stdin }
         )?;
 
         let capabilities = lsp_types::ClientCapabilities {

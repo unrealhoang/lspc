@@ -1,21 +1,8 @@
-use std::fmt;
-use std::io::{self, Read, Write, Stdin, StdinLock, Stdout, StdoutLock};
-use std::thread::{self, JoinHandle};
-
-use crossbeam::channel::{self, Receiver, Sender};
-use rmp_serde as rmps;
-use rmp_serde::{Deserializer, Serializer};
-use rmpv::Value;
-use serde::{
-    self,
-    de::{self, SeqAccess, Visitor},
-    ser::SerializeSeq,
-    Deserialize, Serialize,
-};
+use std::io::{self, Stdin, StdinLock, Stdout, StdoutLock};
 
 use std::error::Error;
 use lspc::neovim::NvimMsg;
-use lspc::rpc::{Client};
+use lspc::rpc::Client;
 
 use lazy_static::lazy_static;
 
@@ -32,19 +19,25 @@ pub fn stdoutlock() -> StdoutLock<'static> {
     STDOUT.lock()
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let stdin = stdinlock();
-    let stdout = stdoutlock();
-    let client = Client::<NvimMsg>::new(stdin, stdout)?;
+fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let client = Client::<NvimMsg>::new(
+        stdinlock,
+        stdoutlock
+    )?;
 
-    for msg in rx {
+    let mut msg_id = 1;
+    for msg in client.receiver {
         match msg {
-            RpcNotification { method, params } => {
+            NvimMsg::RpcNotification { method, .. } => {
                 if method == "hello" {
-                    client.send_request(
-                        "nvim_command",
-                        vec!["echo 'hello from the other side'".into()],
-                    );
+                    client.sender.send(
+                        NvimMsg::RpcRequest {
+                            msgid: msg_id,
+                            method: "nvim_command".into(),
+                            params: vec!["echo 'hello from the other side'".into()]
+                        }
+                    )?;
+                    msg_id += 1;
                 }
             }
             _ => (),
