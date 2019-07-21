@@ -1,4 +1,7 @@
-use std::io::{BufRead, Read, Write};
+use std::{
+    error::Error,
+    io::{BufRead, Write},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, from_value, to_string, to_value, Value};
@@ -8,7 +11,7 @@ use lsp_types::{
     request::Request,
 };
 
-use crate::rpc::{Message, Result};
+use crate::rpc::{RpcError, Message};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
@@ -84,18 +87,19 @@ pub struct RawNotification {
     pub method: String,
     pub params: Value,
 }
-
 impl Message for LspMessage {
-    fn read(r: &mut impl BufRead) -> Result<Option<LspMessage>> {
-        let text = match read_msg_text(r)? {
+    type Id = u64;
+
+    fn read(r: &mut impl BufRead) -> Result<Option<LspMessage>, RpcError> {
+        let text = match read_msg_text(r).map_err(|e| RpcError::Read(e))? {
             None => return Ok(None),
             Some(text) => text,
         };
-        let msg = from_str(&text)?;
+        let msg = from_str(&text).map_err(|e| RpcError::Deserialize(e.description().into()))?;
         Ok(Some(msg))
     }
 
-    fn write(self, w: &mut impl Write) -> Result<()> {
+    fn write(self, w: &mut impl Write) -> Result<(), RpcError> {
         #[derive(Serialize)]
         struct JsonRpc {
             jsonrpc: &'static str,
@@ -105,7 +109,7 @@ impl Message for LspMessage {
         let text = to_string(&JsonRpc {
             jsonrpc: "2.0",
             msg: self,
-        })?;
+        }).map_err(|e| RpcError::Serialize(e.description().into()))?;
         write_msg_text(w, &text)?;
         Ok(())
     }
@@ -114,6 +118,21 @@ impl Message for LspMessage {
         match self {
             LspMessage::Notification(n) => n.is::<Exit>(),
             _ => false,
+        }
+    }
+
+    fn is_response(&self) -> bool {
+        match self {
+            LspMessage::Notification(_) => true,
+            _ => false,
+        }
+    }
+
+    fn id(&self) -> Option<Self::Id> {
+        match self {
+            LspMessage::Request(RawRequest { id, .. })
+            | LspMessage::Response(RawResponse { id, .. }) => Some(*id),
+            LspMessage::Notification(_) => None,
         }
     }
 }
@@ -199,12 +218,13 @@ impl RawNotification {
     }
 }
 
-fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>> {
+fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>, String> {
     let mut size = None;
     let mut buf = String::new();
     loop {
         buf.clear();
-        if inp.read_line(&mut buf)? == 0 {
+        let read_count = inp.read_line(&mut buf).map_err(|e| e.description().to_owned())?;
+        if read_count == 0 {
             return Ok(None);
         }
         if !buf.ends_with("\r\n") {
@@ -220,22 +240,28 @@ fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>> {
             .next()
             .ok_or_else(|| format!("malformed header: {:?}", buf))?;
         if header_name == "Content-Length" {
-            size = Some(header_value.parse::<usize>()?);
+            size = Some(header_value.parse::<usize>()
+                        .map_err(|_| "Failed to parse header size".to_owned())?);
         }
     }
     let size = size.ok_or("no Content-Length")?;
     let mut buf = buf.into_bytes();
     buf.resize(size, 0);
-    inp.read_exact(&mut buf)?;
-    let buf = String::from_utf8(buf)?;
+    inp.read_exact(&mut buf)
+        .map_err(|e| e.description().to_owned())?;
+    let buf = String::from_utf8(buf)
+        .map_err(|e| e.description().to_owned())?;
     log::debug!("< {}", buf);
     Ok(Some(buf))
 }
 
-fn write_msg_text(out: &mut impl Write, msg: &str) -> Result<()> {
+fn write_msg_text(out: &mut impl Write, msg: &str) -> Result<(), RpcError> {
     log::debug!("> {}", msg);
-    write!(out, "Content-Length: {}\r\n\r\n", msg.len())?;
-    out.write_all(msg.as_bytes())?;
-    out.flush()?;
+    write!(out, "Content-Length: {}\r\n\r\n", msg.len())
+        .map_err(|e| RpcError::Write(e.description().into()))?;
+    out.write_all(msg.as_bytes())
+        .map_err(|e| RpcError::Write(e.description().into()))?;
+    out.flush()
+        .map_err(|e| RpcError::Write(e.description().into()))?;
     Ok(())
 }

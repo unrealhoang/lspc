@@ -1,45 +1,39 @@
 mod lsp_msg;
 
 use std::{
+    error::Error,
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde_json::{to_value, Value};
 
-use crossbeam::channel::{bounded, Receiver, Sender};
+use crossbeam::channel::Receiver;
 
 use crate::rpc;
-use lsp_msg::{LspMessage, RawRequest};
+pub use lsp_msg::LspMessage;
+use lsp_msg::RawRequest;
 
-use lazy_static::lazy_static;
-
-use std::io::{self, Stdin, StdinLock};
-
-struct LspClient {
+pub struct LspClient {
     name: String,
     command: String,
     rpc_client: rpc::Client<LspMessage>,
 
-    id_counter: AtomicU64,
-}
-
-struct LspClients {
-    clients: Vec<LspClient>,
+    next_id: AtomicU64,
 }
 
 impl LspClient {
-    fn new(name: &str, command: &str, args: Vec<String>) -> rpc::Result<Self> {
+    pub fn new(name: &str, command: &str, args: Vec<String>) -> Result<Self, String> {
         let child_process = Command::new(command)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .spawn()?;
+            .spawn().map_err(|e| format!("Cannot spawn child process: {}", e.description()))?;
 
         let child_stdout = child_process.stdout.unwrap();
         let child_stdin = child_process.stdin.unwrap();
 
-        let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin)?;
+        let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
 
         let capabilities = lsp_types::ClientCapabilities {
             workspace: None,
@@ -57,11 +51,13 @@ impl LspClient {
             workspace_folders: None,
         };
 
+        let params = to_value(init_params).map_err(|e| format!("Failed to serialize init params: {}", e.description()))?;
         let init_request = RawRequest {
             id: 1,
             method: "".into(),
-            params: to_value(init_params)?,
+            params
         };
+
         client
             .sender
             .send(LspMessage::Request(init_request))
@@ -71,18 +67,21 @@ impl LspClient {
             name: name.into(),
             command: command.into(),
             rpc_client: client,
-            id_counter: AtomicU64::new(2),
+            next_id: AtomicU64::new(2),
         })
     }
 
-    // TODO: wait for response from this method
-    fn request(&self, method: String, params: Value) {
-        let id = self.id_counter.fetch_add(1, Ordering::Relaxed);
+    pub fn send_request(&self, method: String, params: Value) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = RawRequest { id, method, params };
 
         self.rpc_client
             .sender
             .send(LspMessage::Request(request))
             .unwrap();
+    }
+
+    pub fn receiver(&self) -> &Receiver<LspMessage> {
+        &self.rpc_client.receiver
     }
 }
