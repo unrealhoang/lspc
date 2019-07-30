@@ -2,7 +2,7 @@
 
 ## Components
 
-![Components](http://www.plantuml.com/plantuml/proxy?src=https://raw.github.com/unrealhoang/master/design/component.puml)
+![Components](http://www.plantuml.com/plantuml/proxy?src=https://raw.githubusercontent.com/unrealhoang/lspc/master/design/components.puml)
 
 Thick arrow heads are for function call, slim arrow heads are for enqueue messages.
 
