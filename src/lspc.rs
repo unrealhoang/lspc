@@ -1,87 +1,64 @@
 mod lsp_msg;
-
-use std::{
-    error::Error,
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
-};
-
-use serde_json::{to_value, Value};
+mod handler;
 
 use crossbeam::channel::Receiver;
 
-use crate::rpc;
+use lspc::handler::LspHandler;
 pub use lsp_msg::LspMessage;
-use lsp_msg::RawRequest;
 
-pub struct LspClient {
-    name: String,
-    command: String,
-    rpc_client: rpc::Client<LspMessage>,
-
-    next_id: AtomicU64,
+pub enum Event {
+    Hello
 }
 
-impl LspClient {
-    pub fn new(name: &str, command: &str, args: Vec<String>) -> Result<Self, String> {
-        let child_process = Command::new(command)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn().map_err(|e| format!("Cannot spawn child process: {}", e.description()))?;
+pub trait Editor {
+    fn events(&self) -> Receiver<Event>;
+    fn say_hello(&self) -> Result<(), ()>;
+}
 
-        let child_stdout = child_process.stdout.unwrap();
-        let child_stdin = child_process.stdin.unwrap();
+pub struct Lspc<E: Editor> {
+    editor: E,
+    lsp_handlers: Vec<LspHandler>,
+}
 
-        let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
+enum SelectedMsg {
+    Editor(Event),
+    Lsp(usize, LspMessage),
+}
 
-        let capabilities = lsp_types::ClientCapabilities {
-            workspace: None,
-            text_document: None,
-            window: None,
-            experimental: None,
-        };
-        let init_params = lsp_types::InitializeParams {
-            process_id: Some(std::process::id() as u64),
-            root_path: Some("".into()),
-            root_uri: None,
-            initialization_options: None,
-            capabilities,
-            trace: None,
-            workspace_folders: None,
-        };
-
-        let params = to_value(init_params).map_err(|e| format!("Failed to serialize init params: {}", e.description()))?;
-        let init_request = RawRequest {
-            id: 1,
-            method: "".into(),
-            params
-        };
-
-        client
-            .sender
-            .send(LspMessage::Request(init_request))
-            .unwrap();
-
-        Ok(LspClient {
-            name: name.into(),
-            command: command.into(),
-            rpc_client: client,
-            next_id: AtomicU64::new(2),
-        })
+fn select(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler>) -> SelectedMsg {
+    let mut sel = Select::new();
+    sel.recv(&state.nvim_client.receiver());
+    for lsp_client in state.lsp_clients.iter() {
+        sel.recv(&lsp_client.receiver());
     }
 
-    pub fn send_request(&self, method: String, params: Value) {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let request = RawRequest { id, method, params };
+    let oper = sel.select();
+    match oper.index() {
+        0 => {
+            let nvim_msg = oper.recv(&state.nvim_client.receiver()).unwrap();
+            SelectedMsg::Nvim(nvim_msg)
+        }
+        i => {
+            let lsp_msg = oper.recv(&state.lsp_clients[i - 1].receiver()).unwrap();
 
-        self.rpc_client
-            .sender
-            .send(LspMessage::Request(request))
-            .unwrap();
+            SelectedMsg::Lsp(i - 1, lsp_msg)
+        }
+    }
+}
+
+impl<E: Editor> Lspc<E> {
+    pub fn new(editor: E) -> Self {
+        Lspc {
+            editor,
+            lsp_handlers: Vec::new()
+        }
     }
 
-    pub fn receiver(&self) -> &Receiver<LspMessage> {
-        &self.rpc_client.receiver
+    pub fn main_loop(mut self) -> Result<(), dyn std::error::Error> {
+        let event_receiver = editor.events();
+        loop {
+            let selected = select(editor.events(), &lsp_handlers);
+
+        }
     }
 }
