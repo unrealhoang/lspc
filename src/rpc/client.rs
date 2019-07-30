@@ -127,6 +127,7 @@ impl<M: Message> Client<M> {
                         sub.1.send(msg);
                     } else {
                         log::warn!("Received non-requested response: {}", msg.id().unwrap());
+                        reader_sender.send(msg).unwrap();
                     }
                 } else {
                     reader_sender.send(msg).unwrap();
