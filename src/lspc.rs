@@ -5,7 +5,7 @@ use crossbeam::channel::{Receiver, Select};
 use self::handler::{LspHandler, LspMessage};
 
 pub enum Event {
-    Hello
+    Hello,
 }
 
 pub trait Editor {
@@ -46,7 +46,9 @@ fn select(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler>) -> Selec
 
 fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(), ()> {
     match event {
-        Hello => { state.editor.say_hello(); }
+        Hello => {
+            state.editor.say_hello();
+        }
         _ => (),
     }
 
@@ -65,7 +67,7 @@ impl<E: Editor> Lspc<E> {
     pub fn new(editor: E) -> Self {
         Lspc {
             editor,
-            lsp_handlers: Vec::new()
+            lsp_handlers: Vec::new(),
         }
     }
 
@@ -81,7 +83,6 @@ impl<E: Editor> Lspc<E> {
                     handle_lsp_msg(&mut self, index, msg);
                 }
             }
-
         }
     }
 }

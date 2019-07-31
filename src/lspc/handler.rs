@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_str, from_value, to_string, to_value, Value};
 
 use lsp_types::{
-    ServerCapabilities,
     notification::{Exit, Notification},
     request::Request,
+    ServerCapabilities,
 };
 
-use crate::rpc::{self, RpcError, Message};
+use crate::rpc::{self, Message, RpcError};
 
 pub struct LspHandler {
     pid: u32,
@@ -32,7 +32,8 @@ impl LspHandler {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .spawn().map_err(|e| format!("Cannot spawn child process: {}", e.description()))?;
+            .spawn()
+            .map_err(|e| format!("Cannot spawn child process: {}", e.description()))?;
 
         let child_pid = child_process.id();
         let child_stdout = child_process.stdout.unwrap();
@@ -56,11 +57,12 @@ impl LspHandler {
             workspace_folders: None,
         };
 
-        let params = to_value(init_params).map_err(|e| format!("Failed to serialize init params: {}", e.description()))?;
+        let params = to_value(init_params)
+            .map_err(|e| format!("Failed to serialize init params: {}", e.description()))?;
         let init_request = RawRequest {
             id: 1,
             method: "".into(),
-            params
+            params,
         };
 
         client
@@ -185,7 +187,8 @@ impl Message for LspMessage {
         let text = to_string(&JsonRpc {
             jsonrpc: "2.0",
             msg: self,
-        }).map_err(|e| RpcError::Serialize(e.description().into()))?;
+        })
+        .map_err(|e| RpcError::Serialize(e.description().into()))?;
         write_msg_text(w, &text)?;
         Ok(())
     }
@@ -284,7 +287,9 @@ fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>, String> {
     let mut buf = String::new();
     loop {
         buf.clear();
-        let read_count = inp.read_line(&mut buf).map_err(|e| e.description().to_owned())?;
+        let read_count = inp
+            .read_line(&mut buf)
+            .map_err(|e| e.description().to_owned())?;
         if read_count == 0 {
             return Ok(None);
         }
@@ -301,8 +306,11 @@ fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>, String> {
             .next()
             .ok_or_else(|| format!("malformed header: {:?}", buf))?;
         if header_name == "Content-Length" {
-            size = Some(header_value.parse::<usize>()
-                        .map_err(|_| "Failed to parse header size".to_owned())?);
+            size = Some(
+                header_value
+                    .parse::<usize>()
+                    .map_err(|_| "Failed to parse header size".to_owned())?,
+            );
         }
     }
     let size = size.ok_or("no Content-Length")?;
@@ -310,8 +318,7 @@ fn read_msg_text(inp: &mut impl BufRead) -> Result<Option<String>, String> {
     buf.resize(size, 0);
     inp.read_exact(&mut buf)
         .map_err(|e| e.description().to_owned())?;
-    let buf = String::from_utf8(buf)
-        .map_err(|e| e.description().to_owned())?;
+    let buf = String::from_utf8(buf).map_err(|e| e.description().to_owned())?;
     log::debug!("< {}", buf);
     Ok(Some(buf))
 }

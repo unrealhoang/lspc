@@ -1,10 +1,10 @@
 use std::{
-    fmt,
-    time::Duration,
     error::Error,
-    thread::{self, JoinHandle},
+    fmt,
     io::{BufRead, Write},
     sync::atomic::{AtomicU64, Ordering},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -18,32 +18,33 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use crate::rpc::{self, RpcError, Message};
 use crate::lspc::{Editor, Event};
+use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
     rpc_client: rpc::Client<NvimMessage>,
     event_receiver: Receiver<Event>,
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
-    thread: JoinHandle<()>
+    thread: JoinHandle<()>,
 }
 
 fn to_event(msg: NvimMessage) -> Option<Event> {
     match msg {
         NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Some(Event::Hello),
-        _ => None
+        _ => None,
     }
 }
 
 pub enum RequestError {
-    Timeout
+    Timeout,
 }
 
 impl Neovim {
     pub fn new(rpc_client: rpc::Client<NvimMessage>) -> Self {
         let (event_sender, event_receiver) = channel::unbounded();
-        let (subscription_sender, subscription_receiver) = channel::bounded::<(u64, Sender<NvimMessage>)>(16);
+        let (subscription_sender, subscription_receiver) =
+            channel::bounded::<(u64, Sender<NvimMessage>)>(16);
 
         let rpc_receiver = rpc_client.receiver.clone();
         let thread = thread::spawn(move || {
@@ -54,10 +55,7 @@ impl Neovim {
                     while let Ok(sub) = subscription_receiver.try_recv() {
                         subscriptions.push(sub);
                     }
-                    if let Some(index) = subscriptions
-                        .iter()
-                        .position(|item| item.0 == msgid)
-                    {
+                    if let Some(index) = subscriptions.iter().position(|item| item.0 == msgid) {
                         let sub = subscriptions.swap_remove(index);
                         sub.1.send(nvim_msg).unwrap();
                     } else {

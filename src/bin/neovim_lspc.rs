@@ -1,12 +1,11 @@
 use std::io::{self, Stdin, StdinLock, Stdout, StdoutLock};
 
 use lspc::neovim::{Neovim, NvimMessage};
-use lspc::Lspc;
 use lspc::rpc::Client;
+use lspc::Lspc;
 use std::error::Error;
 
 use lazy_static::lazy_static;
-
 
 lazy_static! {
     static ref STDIN: Stdin = io::stdin();
