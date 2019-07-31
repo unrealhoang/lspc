@@ -3,9 +3,11 @@ use std::{
     fmt,
     io::{BufRead, Write},
     sync::atomic::{AtomicU64, Ordering},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{self, Receiver, Sender};
 
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -16,39 +18,138 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use crate::rpc::{self, RpcError, Message};
+use crate::lspc::{Editor, Event};
+use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
     rpc_client: rpc::Client<NvimMessage>,
+    event_receiver: Receiver<Event>,
     next_id: AtomicU64,
+    subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
+    thread: JoinHandle<()>,
+}
+
+fn to_event(msg: NvimMessage) -> Option<Event> {
+    log::debug!("Trying to convert msg: {:?} to event", msg);
+    match msg {
+        NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Some(Event::Hello),
+        NvimMessage::RpcNotification { ref method, ref params } if method == "start_lang_server" => {
+            if params.len() < 3 {
+                None
+            } else {
+                let lang_id = params[0].as_str()?.to_owned();
+                let command = params[1].as_str()?.to_owned();
+                let args = params[2].as_array()?
+                    .iter()
+                    .map(|arg| arg.as_str())
+                    .try_fold(Vec::new(), |mut vec, arg| {
+                        vec.push(arg?.to_owned());
+                        Some(vec)
+                    })?;
+                Some(Event::StartServer(lang_id, command, args))
+            }
+
+        }
+        _ => None,
+    }
+}
+
+pub enum RequestError {
+    Timeout,
 }
 
 impl Neovim {
     pub fn new(rpc_client: rpc::Client<NvimMessage>) -> Self {
+        let (event_sender, event_receiver) = channel::unbounded();
+        let (subscription_sender, subscription_receiver) =
+            channel::bounded::<(u64, Sender<NvimMessage>)>(16);
+
+        let rpc_receiver = rpc_client.receiver.clone();
+        let thread = thread::spawn(move || {
+            let mut subscriptions = Vec::<(u64, Sender<NvimMessage>)>::new();
+
+            for nvim_msg in rpc_receiver {
+                if let NvimMessage::RpcResponse { msgid, .. } = nvim_msg {
+                    while let Ok(sub) = subscription_receiver.try_recv() {
+                        subscriptions.push(sub);
+                    }
+                    if let Some(index) = subscriptions.iter().position(|item| item.0 == msgid) {
+                        let sub = subscriptions.swap_remove(index);
+                        sub.1.send(nvim_msg).unwrap();
+                    } else {
+                        log::error!("Received non-requested response: {}", msgid);
+                    }
+                } else {
+                    if let Some(event) = to_event(nvim_msg) {
+                        event_sender.send(event).unwrap();
+                    } else {
+                        log::error!("Cannot convert nvim msg to editor event");
+                    }
+                }
+            }
+        });
+
         Neovim {
             next_id: AtomicU64::new(1),
+            subscription_sender,
+            event_receiver,
             rpc_client,
+            thread,
         }
     }
 
-    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, RpcError> {
+    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, RequestError> {
         let msgid = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = NvimMessage::RpcRequest {
             msgid,
             method: method.into(),
             params,
         };
-        self.rpc_client.request(req)
+
+        let (response_sender, response_receiver) = channel::bounded::<NvimMessage>(1);
+        self.subscription_sender
+            .send((msgid, response_sender))
+            .unwrap();
+        self.rpc_client.sender.send(req).unwrap();
+
+        response_receiver
+            .recv_timeout(Duration::from_secs(60))
+            .map_err(|_| RequestError::Timeout)
     }
 
     pub fn receiver(&self) -> &Receiver<NvimMessage> {
         &self.rpc_client.receiver
     }
+
+    pub fn close(self) {
+        self.thread.join().unwrap();
+    }
+}
+
+impl Editor for Neovim {
+    fn events(&self) -> Receiver<Event> {
+        self.event_receiver.clone()
+    }
+
+    fn capabilities(&self) -> lsp_types::ClientCapabilities {
+        lsp_types::ClientCapabilities {
+            workspace: None,
+            text_document: None,
+            window: None,
+            experimental: None,
+        }
+    }
+
+    fn say_hello(&self) -> Result<(), ()> {
+        let params = vec!["echo 'hello from the other side'".into()];
+        if let Err(_) = self.request("nvim_command", params) {
+            log::error!("Timeout requesting");
+        };
+        Ok(())
+    }
 }
 
 impl Message for NvimMessage {
-    type Id = u64;
-
     fn read(r: &mut impl BufRead) -> Result<Option<NvimMessage>, RpcError> {
         let mut deserializer = Deserializer::new(r);
         Ok(Some(Deserialize::deserialize(&mut deserializer).map_err(
@@ -74,22 +175,6 @@ impl Message for NvimMessage {
         match self {
             NvimMessage::RpcNotification { method, .. } => method == "exit",
             _ => false,
-        }
-    }
-
-    fn is_response(&self) -> bool {
-        match self {
-            NvimMessage::RpcResponse { .. } => true,
-            _ => false,
-        }
-    }
-
-    fn id(&self) -> Option<u64> {
-        match self {
-            NvimMessage::RpcRequest { msgid, .. } | NvimMessage::RpcResponse { msgid, .. } => {
-                Some(*msgid)
-            }
-            NvimMessage::RpcNotification { .. } => None,
         }
     }
 }
