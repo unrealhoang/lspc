@@ -18,7 +18,7 @@ use lsp_types::{
 
 use crate::rpc::{self, Message, RpcError};
 
-pub struct LspHandler {
+pub struct LspChannel {
     lang_id: String,
     pid: u32,
     // None if server is not started
@@ -28,7 +28,7 @@ pub struct LspHandler {
     next_id: AtomicU64,
 }
 
-impl LspHandler {
+impl LspChannel {
     pub fn new(
         lang_id: String,
         command: String,
@@ -36,7 +36,7 @@ impl LspHandler {
         capabilities: ClientCapabilities,
     ) -> Result<Self, String> {
         log::debug!(
-            "Create new LspHandler with lang_id: {}, command: {}, args: {:?}, capabilities: {:?}",
+            "Create new LspChannel with lang_id: {}, command: {}, args: {:?}, capabilities: {:?}",
             lang_id,
             command,
             args,
@@ -71,7 +71,7 @@ impl LspHandler {
             .send(LspMessage::Request(init_request))
             .unwrap();
 
-        Ok(LspHandler {
+        Ok(LspChannel {
             lang_id: lang_id.into(),
             pid: child_pid,
             rpc_client: client,

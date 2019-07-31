@@ -2,7 +2,7 @@ mod handler;
 
 use crossbeam::channel::{Receiver, Select};
 
-use self::handler::{LspHandler, LspMessage};
+use self::handler::{LspChannel, LspMessage};
 
 #[derive(Debug)]
 pub enum Event {
@@ -18,7 +18,7 @@ pub trait Editor {
 
 pub struct Lspc<E: Editor> {
     editor: E,
-    lsp_handlers: Vec<LspHandler>,
+    lsp_handlers: Vec<LspChannel>,
 }
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ enum SelectedMsg {
     Lsp(usize, LspMessage),
 }
 
-fn select(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler>) -> SelectedMsg {
+fn select(event_receiver: &Receiver<Event>, handlers: &Vec<LspChannel>) -> SelectedMsg {
     let mut sel = Select::new();
     sel.recv(event_receiver);
     for lsp_client in handlers.iter() {
@@ -55,7 +55,7 @@ fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(
         }
         Event::StartServer(lang_id, command, args) => {
             let capabilities = state.editor.capabilities();
-            let lsp_handler = LspHandler::new(lang_id, command, args, capabilities)?;
+            let lsp_handler = LspChannel::new(lang_id, command, args, capabilities)?;
             state.lsp_handlers.push(lsp_handler);
         }
         _ => (),
