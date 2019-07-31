@@ -30,8 +30,26 @@ pub struct Neovim {
 }
 
 fn to_event(msg: NvimMessage) -> Option<Event> {
+    log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
         NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Some(Event::Hello),
+        NvimMessage::RpcNotification { ref method, ref params } if method == "start_lang_server" => {
+            if params.len() < 3 {
+                None
+            } else {
+                let lang_id = params[0].as_str()?.to_owned();
+                let command = params[1].as_str()?.to_owned();
+                let args = params[2].as_array()?
+                    .iter()
+                    .map(|arg| arg.as_str())
+                    .try_fold(Vec::new(), |mut vec, arg| {
+                        vec.push(arg?.to_owned());
+                        Some(vec)
+                    })?;
+                Some(Event::StartServer(lang_id, command, args))
+            }
+
+        }
         _ => None,
     }
 }
@@ -111,6 +129,15 @@ impl Neovim {
 impl Editor for Neovim {
     fn events(&self) -> Receiver<Event> {
         self.event_receiver.clone()
+    }
+
+    fn capabilities(&self) -> lsp_types::ClientCapabilities {
+        lsp_types::ClientCapabilities {
+            workspace: None,
+            text_document: None,
+            window: None,
+            experimental: None,
+        }
     }
 
     fn say_hello(&self) -> Result<(), ()> {

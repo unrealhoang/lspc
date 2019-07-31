@@ -5,15 +5,16 @@ endfunction
 let s:root = expand('<sfile>:p:h:h')
 
 function! lspc#output(log)
-  if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
-    let s:output_buffer = nvim_create_buf(v:true, v:false)
-    call nvim_buf_set_name(s:output_buffer, "[LSPC Output]")
-    call nvim_buf_set_option(s:output_buffer, "buftype", "nofile")
-    call nvim_buf_set_option(s:output_buffer, "buflisted", v:true)
-  endif
+  " if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
+  "   let s:output_buffer = nvim_create_buf(v:true, v:false)
+  "   call nvim_buf_set_name(s:output_buffer, "[LSPC Output]")
+  "   call nvim_buf_set_option(s:output_buffer, "buftype", "nofile")
+  "   call nvim_buf_set_option(s:output_buffer, "buflisted", v:true)
+  " endif
 
-  let l:line = nvim_buf_line_count(s:output_buffer) - 1
-  call nvim_buf_set_lines(s:output_buffer, l:line, l:line, v:true, a:log)
+  " let l:line = nvim_buf_line_count(s:output_buffer) - 1
+  " call nvim_buf_set_lines(s:output_buffer, l:line, l:line, v:true, a:log)
+  echo a:log
 endfunction
 
 function! s:echo_handler(job_id, data, name)
@@ -43,7 +44,7 @@ function! lspc#current_file_type()
 endfunction
 
 function! lspc#start_lang_server()
-  call rpcnotify(s:job_id, 'start_lang_server')
+  call rpcnotify(s:job_id, 'start_lang_server', 'rust', 'rustup', ['run', 'stable', 'rls'])
 endfunction
 
 function! lspc#hello_from_the_other_side()

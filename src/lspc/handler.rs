@@ -6,18 +6,20 @@ use std::{
 };
 
 use crossbeam::channel::Receiver;
+use log;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, from_value, to_string, to_value, Value};
 
 use lsp_types::{
     notification::{Exit, Notification},
-    request::Request,
-    ServerCapabilities,
+    request::{Request, Initialize},
+    ClientCapabilities, ServerCapabilities,
 };
 
 use crate::rpc::{self, Message, RpcError};
 
 pub struct LspHandler {
+    lang_id: String,
     pid: u32,
     // None if server is not started
     server_capabilities: Option<ServerCapabilities>,
@@ -27,7 +29,19 @@ pub struct LspHandler {
 }
 
 impl LspHandler {
-    pub fn new(name: &str, command: &str, args: Vec<String>) -> Result<Self, String> {
+    pub fn new(
+        lang_id: String,
+        command: String,
+        args: Vec<String>,
+        capabilities: ClientCapabilities,
+    ) -> Result<Self, String> {
+        log::debug!(
+            "Create new LspHandler with lang_id: {}, command: {}, args: {:?}, capabilities: {:?}",
+            lang_id,
+            command,
+            args,
+            capabilities
+        );
         let child_process = Command::new(command)
             .args(args)
             .stdin(Stdio::piped())
@@ -41,12 +55,6 @@ impl LspHandler {
 
         let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
 
-        let capabilities = lsp_types::ClientCapabilities {
-            workspace: None,
-            text_document: None,
-            window: None,
-            experimental: None,
-        };
         let init_params = lsp_types::InitializeParams {
             process_id: Some(std::process::id() as u64),
             root_path: Some("".into()),
@@ -56,14 +64,7 @@ impl LspHandler {
             trace: None,
             workspace_folders: None,
         };
-
-        let params = to_value(init_params)
-            .map_err(|e| format!("Failed to serialize init params: {}", e.description()))?;
-        let init_request = RawRequest {
-            id: 1,
-            method: "".into(),
-            params,
-        };
+        let init_request = RawRequest::new::<Initialize>(1, &init_params);
 
         client
             .sender
@@ -71,6 +72,7 @@ impl LspHandler {
             .unwrap();
 
         Ok(LspHandler {
+            lang_id: lang_id.into(),
             pid: child_pid,
             rpc_client: client,
             server_capabilities: None,
