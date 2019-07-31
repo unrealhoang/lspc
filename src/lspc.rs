@@ -1,10 +1,8 @@
-mod lsp_msg;
 mod handler;
 
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Select};
 
-use lspc::handler::LspHandler;
-pub use lsp_msg::LspMessage;
+use self::handler::{LspHandler, LspMessage};
 
 pub enum Event {
     Hello
@@ -27,23 +25,40 @@ enum SelectedMsg {
 
 fn select(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler>) -> SelectedMsg {
     let mut sel = Select::new();
-    sel.recv(&state.nvim_client.receiver());
-    for lsp_client in state.lsp_clients.iter() {
+    sel.recv(event_receiver);
+    for lsp_client in handlers.iter() {
         sel.recv(&lsp_client.receiver());
     }
 
     let oper = sel.select();
     match oper.index() {
         0 => {
-            let nvim_msg = oper.recv(&state.nvim_client.receiver()).unwrap();
-            SelectedMsg::Nvim(nvim_msg)
+            let nvim_msg = oper.recv(event_receiver).unwrap();
+            SelectedMsg::Editor(nvim_msg)
         }
         i => {
-            let lsp_msg = oper.recv(&state.lsp_clients[i - 1].receiver()).unwrap();
+            let lsp_msg = oper.recv(handlers[i - 1].receiver()).unwrap();
 
             SelectedMsg::Lsp(i - 1, lsp_msg)
         }
     }
+}
+
+fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(), ()> {
+    match event {
+        Hello => { state.editor.say_hello(); }
+        _ => (),
+    }
+
+    Ok(())
+}
+
+fn handle_lsp_msg<E: Editor>(state: &mut Lspc<E>, index: usize, msg: LspMessage) -> Result<(), ()> {
+    match msg {
+        _ => (),
+    };
+
+    Ok(())
 }
 
 impl<E: Editor> Lspc<E> {
@@ -54,10 +69,18 @@ impl<E: Editor> Lspc<E> {
         }
     }
 
-    pub fn main_loop(mut self) -> Result<(), dyn std::error::Error> {
-        let event_receiver = editor.events();
+    pub fn main_loop(mut self) {
+        let event_receiver = self.editor.events();
         loop {
-            let selected = select(editor.events(), &lsp_handlers);
+            let selected = select(&event_receiver, &self.lsp_handlers);
+            match selected {
+                SelectedMsg::Editor(event) => {
+                    handle_editor_event(&mut self, event);
+                }
+                SelectedMsg::Lsp(index, msg) => {
+                    handle_lsp_msg(&mut self, index, msg);
+                }
+            }
 
         }
     }
