@@ -21,8 +21,6 @@ use crate::rpc::{self, Message, RpcError};
 pub struct LspChannel {
     lang_id: String,
     pid: u32,
-    // None if server is not started
-    server_capabilities: Option<ServerCapabilities>,
     rpc_client: rpc::Client<LspMessage>,
 
     next_id: AtomicU64,
@@ -33,14 +31,12 @@ impl LspChannel {
         lang_id: String,
         command: String,
         args: Vec<String>,
-        capabilities: ClientCapabilities,
     ) -> Result<Self, String> {
         log::debug!(
-            "Create new LspChannel with lang_id: {}, command: {}, args: {:?}, capabilities: {:?}",
+            "Create new LspChannel with lang_id: {}, command: {}, args: {:?}",
             lang_id,
             command,
             args,
-            capabilities
         );
         let child_process = Command::new(command)
             .args(args)
@@ -55,6 +51,23 @@ impl LspChannel {
 
         let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
 
+        Ok(LspChannel {
+            lang_id: lang_id.into(),
+            pid: child_pid,
+            rpc_client: client,
+            server_capabilities: None,
+            next_id: AtomicU64::new(1),
+        })
+    }
+
+    pub fn fetch_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn initialize(&self, capabilities: ClientCapabilities) -> Result<(), String> {
+        log::debug!("Initialize language server with capabilities: {:?}", capabilities);
+
+        let id = self.fetch_id();
         let init_params = lsp_types::InitializeParams {
             process_id: Some(std::process::id() as u64),
             root_path: Some("".into()),
@@ -65,29 +78,16 @@ impl LspChannel {
             workspace_folders: None,
         };
         let init_request = RawRequest::new::<Initialize>(1, &init_params);
-
-        client
-            .sender
-            .send(LspMessage::Request(init_request))
-            .unwrap();
-
-        Ok(LspChannel {
-            lang_id: lang_id.into(),
-            pid: child_pid,
-            rpc_client: client,
-            server_capabilities: None,
-            next_id: AtomicU64::new(2),
-        })
+        self.send_request(init_request)
     }
 
-    pub fn send_request(&self, method: String, params: Value) {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let request = RawRequest { id, method, params };
-
+    pub fn send_request(&self, request: RawRequest) -> Result<(), String> {
         self.rpc_client
             .sender
             .send(LspMessage::Request(request))
             .unwrap();
+
+        Ok(())
     }
 
     pub fn receiver(&self) -> &Receiver<LspMessage> {
@@ -252,6 +252,19 @@ impl RawResponse {
             result: None,
             error: Some(error),
         }
+    }
+
+    pub fn cast<R>(self) -> ::std::result::Result<R::Result, RawResponse>
+    where
+        R: Request,
+        R::Result: serde::de::DeserializeOwned,
+    {
+        if let Some(result) = self.result {
+            let result: R::Result = from_value(result).unwrap();
+            return Ok(result);
+        }
+
+        Err(self)
     }
 }
 
