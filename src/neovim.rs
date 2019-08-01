@@ -18,7 +18,7 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use crate::lspc::{Editor, Event};
+use crate::lspc::{Editor, Event, EditorError};
 use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
@@ -33,13 +33,17 @@ fn to_event(msg: NvimMessage) -> Option<Event> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
         NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Some(Event::Hello),
-        NvimMessage::RpcNotification { ref method, ref params } if method == "start_lang_server" => {
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "start_lang_server" => {
             if params.len() < 3 {
                 None
             } else {
                 let lang_id = params[0].as_str()?.to_owned();
                 let command = params[1].as_str()?.to_owned();
-                let args = params[2].as_array()?
+                let args = params[2]
+                    .as_array()?
                     .iter()
                     .map(|arg| arg.as_str())
                     .try_fold(Vec::new(), |mut vec, arg| {
@@ -48,14 +52,9 @@ fn to_event(msg: NvimMessage) -> Option<Event> {
                     })?;
                 Some(Event::StartServer(lang_id, command, args))
             }
-
         }
         _ => None,
     }
-}
-
-pub enum RequestError {
-    Timeout,
 }
 
 impl Neovim {
@@ -98,7 +97,7 @@ impl Neovim {
         }
     }
 
-    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, RequestError> {
+    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, EditorError> {
         let msgid = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = NvimMessage::RpcRequest {
             msgid,
@@ -114,7 +113,11 @@ impl Neovim {
 
         response_receiver
             .recv_timeout(Duration::from_secs(60))
-            .map_err(|_| RequestError::Timeout)
+            .map_err(|_| EditorError::Timeout)
+    }
+
+    pub fn command(&self, command: &str) -> Result<NvimMessage, EditorError> {
+        self.request("nvim_command", vec![command.into()])
     }
 
     pub fn receiver(&self) -> &Receiver<NvimMessage> {
@@ -140,11 +143,15 @@ impl Editor for Neovim {
         }
     }
 
-    fn say_hello(&self) -> Result<(), ()> {
+    fn say_hello(&self) -> Result<(), EditorError> {
         let params = vec!["echo 'hello from the other side'".into()];
-        if let Err(_) = self.request("nvim_command", params) {
-            log::error!("Timeout requesting");
-        };
+        self.request("nvim_command", params).map_err(|e| EditorError::Timeout)?;
+
+        Ok(())
+    }
+
+    fn message(&self, msg: &str) -> Result<(), EditorError> {
+        self.command(&format!("echo '{}'", msg))?;
         Ok(())
     }
 }

@@ -1,13 +1,10 @@
 mod handler;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam::channel::{Receiver, Select};
 
-use self::handler::{LspChannel, LspMessage, RawRequest, RawNotification, RawResponse};
-use lsp_types::{
-    request::Initialize,
-    ClientCapabilities,
-    ServerCapabilities
-};
+use self::handler::{LspChannel, LspMessage, RawNotification, RawRequest, RawResponse, LspError};
+use lsp_types::{request::Initialize, ClientCapabilities, ServerCapabilities};
 
 #[derive(Debug)]
 pub enum Event {
@@ -15,20 +12,33 @@ pub enum Event {
     StartServer(String, String, Vec<String>),
 }
 
+#[derive(Debug)]
+pub enum EditorError {
+    Timeout
+}
+
+#[derive(Debug)]
+pub enum LspcError {
+    Editor(EditorError),
+    LangServer(LspError),
+}
+
 pub trait Editor {
     fn events(&self) -> Receiver<Event>;
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
-    fn say_hello(&self) -> Result<(), ()>;
+    fn say_hello(&self) -> Result<(), EditorError>;
+    fn message(&self, msg: &str) -> Result<(), EditorError>;
 }
 
 pub struct Callback<E: Editor> {
     pub id: u64,
-    pub func: Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), String>>
+    pub func: Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>,
 }
 
 pub struct LspHandler<E: Editor> {
     channel: LspChannel,
     callbacks: Vec<Callback<E>>,
+    next_id: AtomicU64,
     // None if server is not started
     server_capabilities: Option<ServerCapabilities>,
 }
@@ -37,15 +47,27 @@ impl<E: Editor> LspHandler<E> {
     fn new(channel: LspChannel) -> Self {
         LspHandler {
             channel,
+            next_id: AtomicU64::new(1),
             callbacks: Vec::new(),
-            server_capabilities: None
+            server_capabilities: None,
         }
     }
 
-    pub fn initialize(&mut self, capabilities: ClientCapabilities, cb: Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), String>>) -> Result<(), String> {
-        log::debug!("Initialize language server with capabilities: {:?}", capabilities);
+    fn fetch_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
 
-        let id = self.channel.fetch_id();
+    pub fn initialize(
+        &mut self,
+        capabilities: ClientCapabilities,
+        cb: Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>,
+    ) -> Result<(), LspcError> {
+        log::debug!(
+            "Initialize language server with capabilities: {:?}",
+            capabilities
+        );
+
+        let id = self.fetch_id();
         let init_params = lsp_types::InitializeParams {
             process_id: Some(std::process::id() as u64),
             root_path: Some("".into()),
@@ -55,13 +77,18 @@ impl<E: Editor> LspHandler<E> {
             trace: None,
             workspace_folders: None,
         };
-        let init_request = RawRequest::new::<Initialize>(1, &init_params);
+        let init_request = RawRequest::new::<Initialize>(id, &init_params);
         self.callbacks.push(Callback { id, func: cb });
         self.request(init_request)
     }
 
-    fn request(&mut self, request: RawRequest) -> Result<(), String> {
-        self.channel.send_request(request)
+    fn request(&mut self, request: RawRequest) -> Result<(), LspcError> {
+        self
+            .channel
+            .send_request(request)
+            .map_err(|e| LspcError::LangServer(e))?;
+
+        Ok(())
     }
 }
 
@@ -76,7 +103,10 @@ enum SelectedMsg {
     Lsp(usize, LspMessage),
 }
 
-fn select<E: Editor>(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler<E>>) -> SelectedMsg {
+fn select<E: Editor>(
+    event_receiver: &Receiver<Event>,
+    handlers: &Vec<LspHandler<E>>,
+) -> SelectedMsg {
     let mut sel = Select::new();
     sel.recv(event_receiver);
     for lsp_client in handlers.iter() {
@@ -97,23 +127,31 @@ fn select<E: Editor>(event_receiver: &Receiver<Event>, handlers: &Vec<LspHandler
     }
 }
 
-fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(), String> {
+fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(), LspcError> {
     match event {
         Event::Hello => {
-            state.editor.say_hello().unwrap();
+            state.editor.say_hello()
+                .map_err(|e| LspcError::Editor(e))?;
         }
         Event::StartServer(lang_id, command, args) => {
             let capabilities = state.editor.capabilities();
-            let channel = LspChannel::new(lang_id, command, args)?;
+            let channel = LspChannel::new(lang_id, command, args).
+                map_err(|e| LspcError::LangServer(e))?;
             let mut lsp_handler = LspHandler::new(channel);
 
-            lsp_handler.initialize(capabilities, Box::new(move |editor, handler, response| {
-                log::debug!("InitializeResponse callback");
-                let response = response.cast::<Initialize>().map_err(|e| "Invalid response".to_owned())?;
-                let server_capabilities = response.capabilities;
-                handler.server_capabilities = Some(server_capabilities);
-                Ok(())
-            }));
+            lsp_handler.initialize(
+                capabilities,
+                Box::new(move |editor: &mut E, handler, response| {
+                    log::debug!("InitializeResponse callback");
+                    let response = response
+                        .cast::<Initialize>()
+                        .map_err(|e| LspcError::LangServer(LspError::InvalidResponse))?;
+                    let server_capabilities = response.capabilities;
+                    handler.server_capabilities = Some(server_capabilities);
+                    editor.message("LangServer initialized");
+                    Ok(())
+                }),
+            )?;
 
             state.lsp_handlers.push(lsp_handler);
         }
@@ -127,13 +165,11 @@ fn handle_lsp_msg<E: Editor>(
     state: &mut Lspc<E>,
     index: usize,
     msg: LspMessage,
-) -> Result<(), String> {
+) -> Result<(), LspcError> {
     let lsp_handler = &mut state.lsp_handlers[index];
     match msg {
-        LspMessage::Request(req) => {
-        }
-        LspMessage::Notification(notification) => {
-        }
+        LspMessage::Request(req) => {}
+        LspMessage::Notification(notification) => {}
         LspMessage::Response(res) => {
             let cb_index = lsp_handler.callbacks.iter().position(|cb| cb.id == res.id);
             if let Some(index) = cb_index {
@@ -162,15 +198,11 @@ impl<E: Editor> Lspc<E> {
             let selected = select(&event_receiver, &self.lsp_handlers);
             log::debug!("Received msg: {:?}", selected);
             let result = match selected {
-                SelectedMsg::Editor(event) => {
-                    handle_editor_event(&mut self, event)
-                }
-                SelectedMsg::Lsp(index, msg) => {
-                    handle_lsp_msg(&mut self, index, msg)
-                }
+                SelectedMsg::Editor(event) => handle_editor_event(&mut self, event),
+                SelectedMsg::Lsp(index, msg) => handle_lsp_msg(&mut self, index, msg),
             };
             if let Err(e) = result {
-                log::error!("Handle error: {}", e);
+                log::error!("Handle error: {:?}", e);
             }
         }
     }

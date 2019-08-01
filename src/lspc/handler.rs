@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    io::{BufRead, Write},
+    io::{self, BufRead, Write},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -12,11 +12,18 @@ use serde_json::{from_str, from_value, to_string, to_value, Value};
 
 use lsp_types::{
     notification::{Exit, Notification},
-    request::{Request, Initialize},
+    request::{Initialize, Request},
     ClientCapabilities, ServerCapabilities,
 };
 
 use crate::rpc::{self, Message, RpcError};
+
+#[derive(Debug)]
+pub enum LspError {
+    Process(io::Error),
+    QueueDisconnected,
+    InvalidResponse
+}
 
 pub struct LspChannel {
     lang_id: String,
@@ -27,11 +34,7 @@ pub struct LspChannel {
 }
 
 impl LspChannel {
-    pub fn new(
-        lang_id: String,
-        command: String,
-        args: Vec<String>,
-    ) -> Result<Self, String> {
+    pub fn new(lang_id: String, command: String, args: Vec<String>) -> Result<Self, LspError> {
         log::debug!(
             "Create new LspChannel with lang_id: {}, command: {}, args: {:?}",
             lang_id,
@@ -43,7 +46,7 @@ impl LspChannel {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Cannot spawn child process: {}", e.description()))?;
+            .map_err(|e| LspError::Process(e))?;
 
         let child_pid = child_process.id();
         let child_stdout = child_process.stdout.unwrap();
@@ -55,37 +58,15 @@ impl LspChannel {
             lang_id: lang_id.into(),
             pid: child_pid,
             rpc_client: client,
-            server_capabilities: None,
             next_id: AtomicU64::new(1),
         })
     }
 
-    pub fn fetch_id(&self) -> u64 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
-    }
-
-    pub fn initialize(&self, capabilities: ClientCapabilities) -> Result<(), String> {
-        log::debug!("Initialize language server with capabilities: {:?}", capabilities);
-
-        let id = self.fetch_id();
-        let init_params = lsp_types::InitializeParams {
-            process_id: Some(std::process::id() as u64),
-            root_path: Some("".into()),
-            root_uri: None,
-            initialization_options: None,
-            capabilities,
-            trace: None,
-            workspace_folders: None,
-        };
-        let init_request = RawRequest::new::<Initialize>(1, &init_params);
-        self.send_request(init_request)
-    }
-
-    pub fn send_request(&self, request: RawRequest) -> Result<(), String> {
+    pub fn send_request(&self, request: RawRequest) -> Result<(), LspError> {
         self.rpc_client
             .sender
             .send(LspMessage::Request(request))
-            .unwrap();
+            .map_err(|e| LspError::QueueDisconnected)?;
 
         Ok(())
     }
