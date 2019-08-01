@@ -1,13 +1,13 @@
 @startuml
 
-Editor ->> "Main Loop": Notify
-"Main Loop" -> LSPHandler: Notify/Request
-LSPHandler ->> RpcClient: Notify/Request
+Editor ->> Lspc: Notify
+Lspc -> LspChannel: Notify/Request
+LspChannel ->> RpcClient: Notify/Request
 ...
-RpcClient ->> "Main Loop": Notify/Response
-"Main Loop" -> LSPHandler: Notify/Response
-LSPHandler ->> "Main Loop": Update editor
-"Main Loop" -> Editor: Update
-Editor --> "Main Loop": Response
+RpcClient ->> Lspc: Notify/Response
+Lspc -> LspChannel: Notify/Response
+LspChannel ->> Lspc: Update editor
+Lspc -> Editor: Update
+Editor --> Lspc: Response
 
 @enduml
