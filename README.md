@@ -16,7 +16,17 @@ Plug '~/path/to/lspc'
 cargo build
 ```
 
-4. Start Rust handler:
+4. Config your vim:
+```
+let g:lspc = {
+      \ 'rust': {
+      \     'root': ['Cargo.lock'],
+      \     'command': ['rustup', 'run', 'stable', 'ra_lsp_server'],
+      \     },
+      \ }
+```
+
+5. Start Rust handler:
 ```
 :LspcStart
 ```
@@ -25,8 +35,15 @@ or
 :call lspc#init()
 ```
 
-5. Test command:
+6. Test command:
 ```
 :call lspc#hello_from_the_other_side()
 ```
+
+7. Start Language Server for current buffer
+```
+:call lspc#start_lang_server()
+```
+
+8. View debug log at `log.txt`
 
