@@ -1,20 +1,28 @@
 mod handler;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering}
+};
 
 use crossbeam::channel::{Receiver, Select};
-
-use self::handler::{LspChannel, LspMessage, RawNotification, RawRequest, RawResponse, LspError};
+use url::Url;
 use lsp_types::{request::Initialize, ClientCapabilities, ServerCapabilities};
+
+use crate::neovim::Config;
+use self::handler::{LspChannel, LspError, LspMessage, RawNotification, RawRequest, RawResponse};
 
 #[derive(Debug)]
 pub enum Event {
     Hello,
-    StartServer(String, String, Vec<String>),
+    StartServer(String, Config, String),
 }
 
 #[derive(Debug)]
 pub enum EditorError {
-    Timeout
+    Timeout,
+    Parse(&'static str),
+    UnexpectedMessage,
+    RootPathNotFound
 }
 
 #[derive(Debug)]
@@ -59,6 +67,7 @@ impl<E: Editor> LspHandler<E> {
 
     pub fn initialize(
         &mut self,
+        root: String,
         capabilities: ClientCapabilities,
         cb: Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>,
     ) -> Result<(), LspcError> {
@@ -68,10 +77,12 @@ impl<E: Editor> LspHandler<E> {
         );
 
         let id = self.fetch_id();
+        let root_url = to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
+
         let init_params = lsp_types::InitializeParams {
             process_id: Some(std::process::id() as u64),
-            root_path: Some("".into()),
-            root_uri: None,
+            root_path: Some(root),
+            root_uri: Some(root_url),
             initialization_options: None,
             capabilities,
             trace: None,
@@ -83,8 +94,7 @@ impl<E: Editor> LspHandler<E> {
     }
 
     fn request(&mut self, request: RawRequest) -> Result<(), LspcError> {
-        self
-            .channel
+        self.channel
             .send_request(request)
             .map_err(|e| LspcError::LangServer(e))?;
 
@@ -127,35 +137,57 @@ fn select<E: Editor>(
     }
 }
 
+fn find_root_path<'a>(mut cur_path: &'a Path, root_marker: &Vec<String>) -> Option<&'a Path> {
+    if cur_path.is_file() {
+        cur_path = cur_path.parent()?;
+    }
+    loop {
+        if root_marker.iter().any(|marker| cur_path.join(marker).exists()) {
+            return Some(cur_path);
+        }
+        cur_path = cur_path.parent()?;
+    }
+}
+
+fn to_file_url(s: &str) -> Option<Url> {
+    Url::from_file_path(s).ok()
+}
+
 fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(), LspcError> {
     match event {
         Event::Hello => {
-            state.editor.say_hello()
-                .map_err(|e| LspcError::Editor(e))?;
+            state.editor.say_hello().map_err(|e| LspcError::Editor(e))?;
         }
-        Event::StartServer(lang_id, command, args) => {
+        Event::StartServer(lang_id, config, cur_path) => {
             let capabilities = state.editor.capabilities();
-            let channel = LspChannel::new(lang_id, command, args).
-                map_err(|e| LspcError::LangServer(e))?;
+            let channel =
+                LspChannel::new(lang_id, &config.command[0], &config.command[1..]).map_err(|e| LspcError::LangServer(e))?;
             let mut lsp_handler = LspHandler::new(channel);
+            let cur_path = PathBuf::from(cur_path);
+            let root = find_root_path(&cur_path, &config.root)
+                .map(|path| path.to_str())
+                .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?
+                .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?;
 
             lsp_handler.initialize(
+                root.to_owned(),
                 capabilities,
                 Box::new(move |editor: &mut E, handler, response| {
                     log::debug!("InitializeResponse callback");
                     let response = response
                         .cast::<Initialize>()
-                        .map_err(|e| LspcError::LangServer(LspError::InvalidResponse))?;
+                        .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
                     let server_capabilities = response.capabilities;
                     handler.server_capabilities = Some(server_capabilities);
-                    editor.message("LangServer initialized");
+                    editor
+                        .message("LangServer initialized")
+                        .map_err(|e| LspcError::Editor(e))?;
                     Ok(())
                 }),
             )?;
 
             state.lsp_handlers.push(lsp_handler);
         }
-        _ => (),
     }
 
     Ok(())

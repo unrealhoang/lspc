@@ -18,7 +18,7 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use crate::lspc::{Editor, Event, EditorError};
+use crate::lspc::{Editor, EditorError, Event};
 use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
@@ -29,31 +29,71 @@ pub struct Neovim {
     thread: JoinHandle<()>,
 }
 
-fn to_event(msg: NvimMessage) -> Option<Event> {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub command: Vec<String>,
+    pub root: Vec<String>,
+}
+
+impl Config {
+    pub fn from_value(config_value: &Value) -> Option<Self> {
+        let mut root = None;
+        let mut command = None;
+        for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
+            let k = key.as_str()?;
+            Some((k, value))
+        }) {
+            if k == "command" {
+                let data = v
+                    .as_array()?
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|s| String::from(s))
+                    .collect::<Vec<String>>();
+
+                if data.len() > 1 {
+                    command = Some(data);
+                }
+            } else if k == "root" {
+                let data = v
+                    .as_array()?
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|s| String::from(s))
+                    .collect::<Vec<String>>();
+                root = Some(data);
+            }
+        }
+        if let (Some(root), Some(command)) = (root, command) {
+            Some(Config { root, command })
+        } else {
+            None
+        }
+    }
+}
+
+fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
-        NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Some(Event::Hello),
+        NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Ok(Event::Hello),
         NvimMessage::RpcNotification {
             ref method,
             ref params,
         } if method == "start_lang_server" => {
             if params.len() < 3 {
-                None
+                Err(EditorError::Parse("Wrong amount of params for start_lang_server"))
             } else {
-                let lang_id = params[0].as_str()?.to_owned();
-                let command = params[1].as_str()?.to_owned();
-                let args = params[2]
-                    .as_array()?
-                    .iter()
-                    .map(|arg| arg.as_str())
-                    .try_fold(Vec::new(), |mut vec, arg| {
-                        vec.push(arg?.to_owned());
-                        Some(vec)
-                    })?;
-                Some(Event::StartServer(lang_id, command, args))
+                let lang_id = params[0].as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for start_lang_server"))?
+                    .to_owned();
+                let config = Config::from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
+                let cur_path = params[2].as_str()
+                    .ok_or(EditorError::Parse("Invalid path param for start_lang_server"))?
+                    .to_owned();
+                Ok(Event::StartServer(lang_id, config, cur_path))
             }
         }
-        _ => None,
+        _ => Err(EditorError::UnexpectedMessage),
     }
 }
 
@@ -79,10 +119,9 @@ impl Neovim {
                         log::error!("Received non-requested response: {}", msgid);
                     }
                 } else {
-                    if let Some(event) = to_event(nvim_msg) {
-                        event_sender.send(event).unwrap();
-                    } else {
-                        log::error!("Cannot convert nvim msg to editor event");
+                    match to_event(nvim_msg) {
+                        Ok(event) => event_sender.send(event).unwrap(),
+                        Err(e) => log::error!("Cannot convert nvim msg to editor event: {:?}", e),
                     }
                 }
             }
@@ -145,7 +184,8 @@ impl Editor for Neovim {
 
     fn say_hello(&self) -> Result<(), EditorError> {
         let params = vec!["echo 'hello from the other side'".into()];
-        self.request("nvim_command", params).map_err(|e| EditorError::Timeout)?;
+        self.request("nvim_command", params)
+            .map_err(|e| EditorError::Timeout)?;
 
         Ok(())
     }

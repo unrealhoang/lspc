@@ -2,7 +2,7 @@ use std::{
     error::Error,
     io::{self, BufRead, Write},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::AtomicU64,
 };
 
 use crossbeam::channel::Receiver;
@@ -12,8 +12,7 @@ use serde_json::{from_str, from_value, to_string, to_value, Value};
 
 use lsp_types::{
     notification::{Exit, Notification},
-    request::{Initialize, Request},
-    ClientCapabilities, ServerCapabilities,
+    request::Request,
 };
 
 use crate::rpc::{self, Message, RpcError};
@@ -22,7 +21,7 @@ use crate::rpc::{self, Message, RpcError};
 pub enum LspError {
     Process(io::Error),
     QueueDisconnected,
-    InvalidResponse
+    InvalidResponse,
 }
 
 pub struct LspChannel {
@@ -34,7 +33,7 @@ pub struct LspChannel {
 }
 
 impl LspChannel {
-    pub fn new(lang_id: String, command: String, args: Vec<String>) -> Result<Self, LspError> {
+    pub fn new(lang_id: String, command: &String, args: &[String]) -> Result<Self, LspError> {
         log::debug!(
             "Create new LspChannel with lang_id: {}, command: {}, args: {:?}",
             lang_id,
@@ -55,7 +54,7 @@ impl LspChannel {
         let client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
 
         Ok(LspChannel {
-            lang_id: lang_id.into(),
+            lang_id,
             pid: child_pid,
             rpc_client: client,
             next_id: AtomicU64::new(1),

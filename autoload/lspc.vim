@@ -44,7 +44,10 @@ function! lspc#current_file_type()
 endfunction
 
 function! lspc#start_lang_server()
-  call rpcnotify(s:job_id, 'start_lang_server', 'rust', 'rustup', ['run', 'stable', 'rls'])
+  let l:lang_id = 'rust'
+  let l:config = g:lspc[l:lang_id]
+  let l:cur_path = lspc#buffer#filename()
+  call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
 endfunction
 
 function! lspc#hello_from_the_other_side()
