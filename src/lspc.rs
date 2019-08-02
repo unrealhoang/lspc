@@ -1,15 +1,15 @@
 mod handler;
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering}
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crossbeam::channel::{Receiver, Select};
-use url::Url;
 use lsp_types::{request::Initialize, ClientCapabilities, ServerCapabilities};
+use url::Url;
 
-use crate::neovim::Config;
 use self::handler::{LspChannel, LspError, LspMessage, RawNotification, RawRequest, RawResponse};
+use crate::neovim::Config;
 
 #[derive(Debug)]
 pub enum Event {
@@ -22,7 +22,7 @@ pub enum EditorError {
     Timeout,
     Parse(&'static str),
     UnexpectedMessage,
-    RootPathNotFound
+    RootPathNotFound,
 }
 
 #[derive(Debug)]
@@ -77,7 +77,8 @@ impl<E: Editor> LspHandler<E> {
         );
 
         let id = self.fetch_id();
-        let root_url = to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
+        let root_url =
+            to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
 
         let init_params = lsp_types::InitializeParams {
             process_id: Some(std::process::id() as u64),
@@ -142,7 +143,10 @@ fn find_root_path<'a>(mut cur_path: &'a Path, root_marker: &Vec<String>) -> Opti
         cur_path = cur_path.parent()?;
     }
     loop {
-        if root_marker.iter().any(|marker| cur_path.join(marker).exists()) {
+        if root_marker
+            .iter()
+            .any(|marker| cur_path.join(marker).exists())
+        {
             return Some(cur_path);
         }
         cur_path = cur_path.parent()?;
@@ -160,8 +164,8 @@ fn handle_editor_event<E: Editor>(state: &mut Lspc<E>, event: Event) -> Result<(
         }
         Event::StartServer(lang_id, config, cur_path) => {
             let capabilities = state.editor.capabilities();
-            let channel =
-                LspChannel::new(lang_id, &config.command[0], &config.command[1..]).map_err(|e| LspcError::LangServer(e))?;
+            let channel = LspChannel::new(lang_id, &config.command[0], &config.command[1..])
+                .map_err(|e| LspcError::LangServer(e))?;
             let mut lsp_handler = LspHandler::new(channel);
             let cur_path = PathBuf::from(cur_path);
             let root = find_root_path(&cur_path, &config.root)

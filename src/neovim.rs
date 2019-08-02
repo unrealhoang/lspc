@@ -81,14 +81,23 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
             ref params,
         } if method == "start_lang_server" => {
             if params.len() < 3 {
-                Err(EditorError::Parse("Wrong amount of params for start_lang_server"))
+                Err(EditorError::Parse(
+                    "Wrong amount of params for start_lang_server",
+                ))
             } else {
-                let lang_id = params[0].as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for start_lang_server"))?
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse(
+                        "Invalid lang_id param for start_lang_server",
+                    ))?
                     .to_owned();
-                let config = Config::from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
-                let cur_path = params[2].as_str()
-                    .ok_or(EditorError::Parse("Invalid path param for start_lang_server"))?
+                let config = Config::from_value(&params[1])
+                    .ok_or(EditorError::Parse("Failed to parse Config"))?;
+                let cur_path = params[2]
+                    .as_str()
+                    .ok_or(EditorError::Parse(
+                        "Invalid path param for start_lang_server",
+                    ))?
                     .to_owned();
                 Ok(Event::StartServer(lang_id, config, cur_path))
             }
