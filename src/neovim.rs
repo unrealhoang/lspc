@@ -9,7 +9,9 @@ use std::{
 
 use crossbeam::channel::{self, Receiver, Sender};
 
-use lsp_types::{Position, TextDocumentIdentifier};
+use lsp_types::{
+    Position, TextDocumentIdentifier, MarkedString, MarkupContent, MarkupKind, HoverContents, Hover
+};
 use rmp_serde::Deserializer;
 use rmpv::Value;
 use serde::{
@@ -35,6 +37,82 @@ pub struct Neovim {
 pub struct Config {
     pub command: Vec<String>,
     pub root: Vec<String>,
+}
+
+pub trait ToDisplay {
+    fn to_display(&self) -> Vec<String>;
+    fn vim_filetype(&self) -> Option<String> {
+        None
+    }
+}
+
+impl ToDisplay for MarkedString {
+    fn to_display(&self) -> Vec<String> {
+        let s = match self {
+            MarkedString::String(ref s) => s,
+            MarkedString::LanguageString(ref ls) => &ls.value,
+        };
+        s.lines().map(String::from).collect()
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self {
+            MarkedString::String(_) => Some("markdown".to_string()),
+            MarkedString::LanguageString(ref ls) => Some(ls.language.clone()),
+        }
+    }
+}
+
+impl ToDisplay for MarkupContent {
+    fn to_display(&self) -> Vec<String> {
+        self.value.lines().map(str::to_string).collect()
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self.kind {
+            MarkupKind::Markdown => Some("markdown".to_string()),
+            MarkupKind::PlainText => Some("text".to_string()),
+        }
+    }
+}
+
+impl ToDisplay for Hover {
+    fn to_display(&self) -> Vec<String> {
+        match self.contents {
+            HoverContents::Scalar(ref ms) => ms.to_display(),
+            HoverContents::Array(ref arr) => arr
+                .iter()
+                .flat_map(|ms| {
+                    if let MarkedString::LanguageString(ref ls) = ms {
+                        let mut buf = Vec::new();
+
+                        buf.push(format!("```{}", ls.language));
+                        buf.extend(ls.value.lines().map(String::from));
+                        buf.push("```".to_string());
+
+                        buf
+                    } else {
+                        ms.to_display()
+                    }
+                })
+                .collect(),
+            HoverContents::Markup(ref mc) => mc.to_display(),
+        }
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self.contents {
+            HoverContents::Scalar(ref ms) => ms.vim_filetype(),
+            HoverContents::Array(_) => Some("markdown".to_string()),
+            HoverContents::Markup(ref mc) => mc.vim_filetype(),
+        }
+    }
+}
+
+impl ToDisplay for str {
+    fn to_display(&self) -> Vec<String> {
+        self.lines().map(String::from).collect()
+    }
 }
 
 // Todo: cut down these parsing logic by implement Deserializer for Value
@@ -233,6 +311,11 @@ impl Neovim {
         self.request("nvim_command", vec![command.into()])
     }
 
+    // Call VimL function
+    pub fn call_function(&self, func: &str, args: Vec<Value>) -> Result<NvimMessage, EditorError> {
+        self.request("nvim_call_function", vec![func.into(), args.into()])
+    }
+
     pub fn receiver(&self) -> &Receiver<NvimMessage> {
         &self.rpc_client.receiver
     }
@@ -269,12 +352,21 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn show_hover(
+
+    fn preview<D: ToDisplay>(
         &self,
         text_document: TextDocumentIdentifier,
-        range: Option<lsp_types::Range>,
-        contents: lsp_types::HoverContents,
+        to_display: &D
     ) -> Result<(), EditorError> {
+
+        let bufname = "__LanguageClient__";
+        let filetype = if let Some(ft) = &to_display.vim_filetype() {
+            ft.as_str().into()
+        } else {
+            Value::Nil
+        };
+        let lines = to_display.to_display().iter().map(|item| Value::from(item.as_str())).collect::<Vec<_>>().into();
+        self.call_function("lspc#command#open_hover_preview", vec![bufname.into(), lines, filetype]);
 
         Ok(())
     }

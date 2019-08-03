@@ -13,7 +13,7 @@ use lsp_types::{
 use url::Url;
 
 use self::handler::{LspChannel, LspError, LspMessage, RawNotification, RawRequest, RawResponse};
-use crate::neovim::Config;
+use crate::neovim::{Config, ToDisplay};
 
 #[derive(Debug)]
 pub enum Event {
@@ -34,6 +34,7 @@ pub enum Event {
 pub enum EditorError {
     Timeout,
     Parse(&'static str),
+    CommandDataInvalid(&'static str),
     UnexpectedMessage,
     RootPathNotFound,
 }
@@ -51,11 +52,10 @@ pub trait Editor {
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
     fn message(&self, msg: &str) -> Result<(), EditorError>;
-    fn show_hover(
+    fn preview<D: ToDisplay>(
         &self,
         text_document: TextDocumentIdentifier,
-        range: Option<lsp_types::Range>,
-        contents: lsp_types::HoverContents,
+        to_display: &D,
     ) -> Result<(), EditorError>;
 }
 
@@ -282,7 +282,7 @@ impl<E: Editor> Lspc<E> {
                             .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
                         if let Some(hover) = response {
                             editor
-                                .show_hover(text_document_clone, hover.range, hover.contents)
+                                .preview(text_document_clone, &hover)
                                 .map_err(|e| LspcError::Editor(e))?;
                         }
 
