@@ -9,6 +9,7 @@ use std::{
 
 use crossbeam::channel::{self, Receiver, Sender};
 
+use lsp_types::{Position, TextDocumentIdentifier};
 use rmp_serde::Deserializer;
 use rmpv::Value;
 use serde::{
@@ -17,6 +18,7 @@ use serde::{
     ser::SerializeSeq,
     Deserialize, Serialize,
 };
+use url::Url;
 
 use crate::lspc::{Editor, EditorError, Event};
 use crate::rpc::{self, Message, RpcError};
@@ -35,6 +37,7 @@ pub struct Config {
     pub root: Vec<String>,
 }
 
+// Todo: cut down these parsing logic by implement Deserializer for Value
 impl Config {
     pub fn from_value(config_value: &Value) -> Option<Self> {
         let mut root = None;
@@ -72,6 +75,34 @@ impl Config {
     }
 }
 
+fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
+    let uri = Url::from_file_path(s).ok()?;
+    Some(TextDocumentIdentifier::new(uri))
+}
+
+fn to_position(s: &Vec<(Value, Value)>) -> Option<Position> {
+    let mut line = None;
+    let mut character = None;
+
+    for (k, v) in s.iter().filter_map(|(key, value)| {
+        let k = key.as_str()?;
+        Some((k, value))
+    }) {
+        if k == "line" {
+            let data = v.as_u64()?;
+            line = Some(data);
+        } else if k == "character" {
+            let data = v.as_u64()?;
+            character = Some(data);
+        }
+    }
+    if let (Some(line), Some(character)) = (line, character) {
+        Some(Position::new(line, character))
+    } else {
+        None
+    }
+}
+
 fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
@@ -99,7 +130,41 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                         "Invalid path param for start_lang_server",
                     ))?
                     .to_owned();
-                Ok(Event::StartServer(lang_id, config, cur_path))
+                Ok(Event::StartServer {
+                    lang_id,
+                    config,
+                    cur_path,
+                })
+            }
+        }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "hover" => {
+            if params.len() < 2 {
+                Err(EditorError::Parse("Wrong amount of params for hover"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
+                    .to_owned();
+                let text_document_str = params[1]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for hover"),
+                )?;
+                let position_map = params[2]
+                    .as_map()
+                    .ok_or(EditorError::Parse("Invalid position param for hover"))?;
+                let position = to_position(position_map)
+                    .ok_or(EditorError::Parse("Can't parse position param for hover"))?;
+
+                Ok(Event::Hover {
+                    lang_id,
+                    text_document,
+                    position,
+                })
             }
         }
         _ => Err(EditorError::UnexpectedMessage),
@@ -201,6 +266,16 @@ impl Editor for Neovim {
 
     fn message(&self, msg: &str) -> Result<(), EditorError> {
         self.command(&format!("echo '{}'", msg))?;
+        Ok(())
+    }
+
+    fn show_hover(
+        &self,
+        text_document: TextDocumentIdentifier,
+        range: Option<lsp_types::Range>,
+        contents: lsp_types::HoverContents,
+    ) -> Result<(), EditorError> {
+
         Ok(())
     }
 }
