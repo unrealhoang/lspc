@@ -61,10 +61,10 @@ impl LspChannel {
         })
     }
 
-    pub fn send_request(&self, request: RawRequest) -> Result<(), LspError> {
+    pub fn send_msg(&self, request: LspMessage) -> Result<(), LspError> {
         self.rpc_client
             .sender
-            .send(LspMessage::Request(request))
+            .send(request)
             .map_err(|e| LspError::QueueDisconnected)?;
 
         Ok(())

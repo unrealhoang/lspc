@@ -9,6 +9,9 @@ use std::{
 
 use crossbeam::channel::{self, Receiver, Sender};
 
+use lsp_types::{
+    Position, TextDocumentIdentifier, MarkedString, MarkupContent, MarkupKind, HoverContents, Hover
+};
 use rmp_serde::Deserializer;
 use rmpv::Value;
 use serde::{
@@ -17,6 +20,7 @@ use serde::{
     ser::SerializeSeq,
     Deserialize, Serialize,
 };
+use url::Url;
 
 use crate::lspc::{Editor, EditorError, Event};
 use crate::rpc::{self, Message, RpcError};
@@ -35,6 +39,83 @@ pub struct Config {
     pub root: Vec<String>,
 }
 
+pub trait ToDisplay {
+    fn to_display(&self) -> Vec<String>;
+    fn vim_filetype(&self) -> Option<String> {
+        None
+    }
+}
+
+impl ToDisplay for MarkedString {
+    fn to_display(&self) -> Vec<String> {
+        let s = match self {
+            MarkedString::String(ref s) => s,
+            MarkedString::LanguageString(ref ls) => &ls.value,
+        };
+        s.lines().map(String::from).collect()
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self {
+            MarkedString::String(_) => Some("markdown".to_string()),
+            MarkedString::LanguageString(ref ls) => Some(ls.language.clone()),
+        }
+    }
+}
+
+impl ToDisplay for MarkupContent {
+    fn to_display(&self) -> Vec<String> {
+        self.value.lines().map(str::to_string).collect()
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self.kind {
+            MarkupKind::Markdown => Some("markdown".to_string()),
+            MarkupKind::PlainText => Some("text".to_string()),
+        }
+    }
+}
+
+impl ToDisplay for Hover {
+    fn to_display(&self) -> Vec<String> {
+        match self.contents {
+            HoverContents::Scalar(ref ms) => ms.to_display(),
+            HoverContents::Array(ref arr) => arr
+                .iter()
+                .flat_map(|ms| {
+                    if let MarkedString::LanguageString(ref ls) = ms {
+                        let mut buf = Vec::new();
+
+                        buf.push(format!("```{}", ls.language));
+                        buf.extend(ls.value.lines().map(String::from));
+                        buf.push("```".to_string());
+
+                        buf
+                    } else {
+                        ms.to_display()
+                    }
+                })
+                .collect(),
+            HoverContents::Markup(ref mc) => mc.to_display(),
+        }
+    }
+
+    fn vim_filetype(&self) -> Option<String> {
+        match self.contents {
+            HoverContents::Scalar(ref ms) => ms.vim_filetype(),
+            HoverContents::Array(_) => Some("markdown".to_string()),
+            HoverContents::Markup(ref mc) => mc.vim_filetype(),
+        }
+    }
+}
+
+impl ToDisplay for str {
+    fn to_display(&self) -> Vec<String> {
+        self.lines().map(String::from).collect()
+    }
+}
+
+// Todo: cut down these parsing logic by implement Deserializer for Value
 impl Config {
     pub fn from_value(config_value: &Value) -> Option<Self> {
         let mut root = None;
@@ -72,6 +153,34 @@ impl Config {
     }
 }
 
+fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
+    let uri = Url::from_file_path(s).ok()?;
+    Some(TextDocumentIdentifier::new(uri))
+}
+
+fn to_position(s: &Vec<(Value, Value)>) -> Option<Position> {
+    let mut line = None;
+    let mut character = None;
+
+    for (k, v) in s.iter().filter_map(|(key, value)| {
+        let k = key.as_str()?;
+        Some((k, value))
+    }) {
+        if k == "line" {
+            let data = v.as_u64()?;
+            line = Some(data);
+        } else if k == "character" {
+            let data = v.as_u64()?;
+            character = Some(data);
+        }
+    }
+    if let (Some(line), Some(character)) = (line, character) {
+        Some(Position::new(line, character))
+    } else {
+        None
+    }
+}
+
 fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
@@ -99,7 +208,41 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                         "Invalid path param for start_lang_server",
                     ))?
                     .to_owned();
-                Ok(Event::StartServer(lang_id, config, cur_path))
+                Ok(Event::StartServer {
+                    lang_id,
+                    config,
+                    cur_path,
+                })
+            }
+        }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "hover" => {
+            if params.len() < 2 {
+                Err(EditorError::Parse("Wrong amount of params for hover"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
+                    .to_owned();
+                let text_document_str = params[1]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for hover"),
+                )?;
+                let position_map = params[2]
+                    .as_map()
+                    .ok_or(EditorError::Parse("Invalid position param for hover"))?;
+                let position = to_position(position_map)
+                    .ok_or(EditorError::Parse("Can't parse position param for hover"))?;
+
+                Ok(Event::Hover {
+                    lang_id,
+                    text_document,
+                    position,
+                })
             }
         }
         _ => Err(EditorError::UnexpectedMessage),
@@ -168,6 +311,11 @@ impl Neovim {
         self.request("nvim_command", vec![command.into()])
     }
 
+    // Call VimL function
+    pub fn call_function(&self, func: &str, args: Vec<Value>) -> Result<NvimMessage, EditorError> {
+        self.request("nvim_call_function", vec![func.into(), args.into()])
+    }
+
     pub fn receiver(&self) -> &Receiver<NvimMessage> {
         &self.rpc_client.receiver
     }
@@ -201,6 +349,25 @@ impl Editor for Neovim {
 
     fn message(&self, msg: &str) -> Result<(), EditorError> {
         self.command(&format!("echo '{}'", msg))?;
+        Ok(())
+    }
+
+
+    fn preview<D: ToDisplay>(
+        &self,
+        text_document: TextDocumentIdentifier,
+        to_display: &D
+    ) -> Result<(), EditorError> {
+
+        let bufname = "__LanguageClient__";
+        let filetype = if let Some(ft) = &to_display.vim_filetype() {
+            ft.as_str().into()
+        } else {
+            Value::Nil
+        };
+        let lines = to_display.to_display().iter().map(|item| Value::from(item.as_str())).collect::<Vec<_>>().into();
+        self.call_function("lspc#command#open_hover_preview", vec![bufname.into(), lines, filetype]);
+
         Ok(())
     }
 }

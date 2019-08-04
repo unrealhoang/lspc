@@ -50,6 +50,13 @@ function! lspc#start_lang_server()
   call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
 endfunction
 
+function! lspc#hover()
+  let l:lang_id = 'rust'
+  let l:cur_path = lspc#buffer#filename()
+  let l:position = lspc#buffer#position()
+  call rpcnotify(s:job_id, 'hover', l:lang_id, l:cur_path, l:position)
+endfunction
+
 function! lspc#hello_from_the_other_side()
   call rpcnotify(s:job_id, 'hello')
 endfunction
