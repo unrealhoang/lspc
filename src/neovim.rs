@@ -10,7 +10,7 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    Position, TextDocumentIdentifier, MarkedString, MarkupContent, MarkupKind, HoverContents, Hover
+    Hover, HoverContents, MarkedString, MarkupContent, MarkupKind, Position, TextDocumentIdentifier,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -22,7 +22,7 @@ use serde::{
 };
 use url::Url;
 
-use crate::lspc::{Editor, EditorError, Event};
+use crate::lspc::{types::InlayHint, Editor, EditorError, Event};
 use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
@@ -219,7 +219,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
             ref method,
             ref params,
         } if method == "hover" => {
-            if params.len() < 2 {
+            if params.len() < 3 {
                 Err(EditorError::Parse("Wrong amount of params for hover"))
             } else {
                 let lang_id = params[0]
@@ -245,7 +245,31 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                 })
             }
         }
-        _ => Err(EditorError::UnexpectedMessage),
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "inlay_hints" => {
+            if params.len() < 2 {
+                Err(EditorError::Parse("Wrong amount of params for hover"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
+                    .to_owned();
+                let text_document_str = params[1]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for hover"),
+                )?;
+
+                Ok(Event::InlayHints {
+                    lang_id,
+                    text_document,
+                })
+            }
+        }
+        _ => Err(EditorError::UnexpectedMessage(format!("{:?}", msg))),
     }
 }
 
@@ -307,6 +331,19 @@ impl Neovim {
             .map_err(|_| EditorError::Timeout)
     }
 
+    pub fn notify(&self, method: &str, params: Vec<Value>) -> Result<(), EditorError> {
+        let noti = NvimMessage::RpcNotification {
+            method: method.into(),
+            params,
+        };
+        log::debug!("NVIM > {:?}", noti);
+
+        // FIXME: add RpcQueueFull to EditorError??
+        self.rpc_client.sender.send(noti).unwrap();
+
+        Ok(())
+    }
+
     pub fn command(&self, command: &str) -> Result<NvimMessage, EditorError> {
         self.request("nvim_command", vec![command.into()])
     }
@@ -314,6 +351,44 @@ impl Neovim {
     // Call VimL function
     pub fn call_function(&self, func: &str, args: Vec<Value>) -> Result<NvimMessage, EditorError> {
         self.request("nvim_call_function", vec![func.into(), args.into()])
+    }
+
+    pub fn create_namespace(&self, ns_name: &str) -> Result<u64, EditorError> {
+        let response = self.request("nvim_create_namespace", vec![ns_name.into()])?;
+        log::debug!("Create namespace response: {:?}", response);
+        if let NvimMessage::RpcResponse { ref result, .. } = response {
+            Ok(result
+                .as_u64()
+                .ok_or(EditorError::UnexpectedResponse(format!("{:?}", response)))?)
+        } else {
+            Err(EditorError::UnexpectedResponse(format!("{:?}", response)))
+        }
+    }
+
+    pub fn set_virtual_text(
+        &self,
+        buffer_id: u64,
+        ns_id: u64,
+        line: u64,
+        chunks: Vec<(&str, &str)>,
+    ) -> Result<(), EditorError> {
+        let chunks = chunks
+            .into_iter()
+            .map(|(label, hl_group)| Value::Array(vec![Value::from(label), Value::from(hl_group)]))
+            .collect::<Vec<_>>()
+            .into();
+        self.notify(
+            "nvim_buf_set_virtual_text",
+            vec![
+                buffer_id.into(),
+                ns_id.into(),
+                line.into(),
+                chunks,
+                Value::Map(Vec::new())
+            ],
+        )?;
+
+        Ok(())
     }
 
     pub fn receiver(&self) -> &Receiver<NvimMessage> {
@@ -352,21 +427,46 @@ impl Editor for Neovim {
         Ok(())
     }
 
-
     fn preview<D: ToDisplay>(
         &self,
         text_document: TextDocumentIdentifier,
-        to_display: &D
+        to_display: &D,
     ) -> Result<(), EditorError> {
-
         let bufname = "__LanguageClient__";
         let filetype = if let Some(ft) = &to_display.vim_filetype() {
             ft.as_str().into()
         } else {
             Value::Nil
         };
-        let lines = to_display.to_display().iter().map(|item| Value::from(item.as_str())).collect::<Vec<_>>().into();
-        self.call_function("lspc#command#open_hover_preview", vec![bufname.into(), lines, filetype]);
+        let lines = to_display
+            .to_display()
+            .iter()
+            .map(|item| Value::from(item.as_str()))
+            .collect::<Vec<_>>()
+            .into();
+        self.call_function(
+            "lspc#command#open_hover_preview",
+            vec![bufname.into(), lines, filetype],
+        );
+
+        Ok(())
+    }
+
+    fn inline_hints(
+        &self,
+        text_document: TextDocumentIdentifier,
+        hints: &Vec<InlayHint>,
+    ) -> Result<(), EditorError> {
+        let ns_id = self.create_namespace(text_document.uri.path())?;
+        for hint in hints {
+            // FIXME: find correct buffer using `text_document`
+            self.set_virtual_text(
+                0,
+                ns_id,
+                hint.range.start.line,
+                vec![(&hint.label, "error")],
+            );
+        }
 
         Ok(())
     }

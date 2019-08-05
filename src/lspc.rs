@@ -1,13 +1,17 @@
 mod handler;
+// Custom LSP types
+pub mod types;
+
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use self::types::{InlayHint, InlayHints, InlayHintsParams};
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
+    notification::Initialized,
     request::{HoverRequest, Initialize},
-    notification::{Initialized},
     ClientCapabilities, Position, ServerCapabilities, TextDocumentIdentifier,
 };
 use url::Url;
@@ -28,6 +32,10 @@ pub enum Event {
         text_document: TextDocumentIdentifier,
         position: Position,
     },
+    InlayHints {
+        lang_id: String,
+        text_document: TextDocumentIdentifier,
+    },
 }
 
 #[derive(Debug)]
@@ -35,7 +43,8 @@ pub enum EditorError {
     Timeout,
     Parse(&'static str),
     CommandDataInvalid(&'static str),
-    UnexpectedMessage,
+    UnexpectedResponse(String),
+    UnexpectedMessage(String),
     RootPathNotFound,
 }
 
@@ -57,10 +66,14 @@ pub trait Editor {
         text_document: TextDocumentIdentifier,
         to_display: &D,
     ) -> Result<(), EditorError>;
+    fn inline_hints(
+        &self,
+        text_document: TextDocumentIdentifier,
+        hints: &Vec<InlayHint>,
+    ) -> Result<(), EditorError>;
 }
 
-type LspCallback<E> =
-    Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>;
+type LspCallback<E> = Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>;
 
 pub struct Callback<E: Editor> {
     pub id: u64,
@@ -122,7 +135,7 @@ impl<E: Editor> LspHandler<E> {
 
     fn initialized(&mut self) -> Result<(), LspcError> {
         log::debug!("Sending initialized notification");
-        let initialized_params = lsp_types::InitializedParams{};
+        let initialized_params = lsp_types::InitializedParams {};
         let initialized_notification = RawNotification::new::<Initialized>(&initialized_params);
 
         self.notify(initialized_notification)
@@ -144,6 +157,20 @@ impl<E: Editor> LspHandler<E> {
         let hover_request = RawRequest::new::<HoverRequest>(id, &hover_params);
         self.callbacks.push(Callback { id, func: cb });
         self.request(hover_request)
+    }
+
+    fn inlay_hints_request(
+        &mut self,
+        text_document: TextDocumentIdentifier,
+        cb: LspCallback<E>,
+    ) -> Result<(), LspcError> {
+        log::debug!("Send inlay hints request: {:?}", text_document);
+
+        let id = self.fetch_id();
+        let inlay_hints_params = InlayHintsParams { text_document };
+        let inlay_hints_request = RawRequest::new::<InlayHints>(id, &inlay_hints_params);
+        self.callbacks.push(Callback { id, func: cb });
+        self.request(inlay_hints_request)
     }
 
     fn request(&mut self, request: RawRequest) -> Result<(), LspcError> {
@@ -235,8 +262,9 @@ impl<E: Editor> Lspc<E> {
                 cur_path,
             } => {
                 let capabilities = self.editor.capabilities();
-                let channel = LspChannel::new(lang_id.clone(), &config.command[0], &config.command[1..])
-                    .map_err(|e| LspcError::LangServer(e))?;
+                let channel =
+                    LspChannel::new(lang_id.clone(), &config.command[0], &config.command[1..])
+                        .map_err(|e| LspcError::LangServer(e))?;
                 let mut lsp_handler = LspHandler::new(lang_id, channel);
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root)
@@ -290,16 +318,33 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
+            Event::InlayHints {
+                lang_id,
+                text_document,
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let text_document_clone = text_document.clone();
+                handler.inlay_hints_request(
+                    text_document,
+                    Box::new(move |editor: &mut E, handler, response| {
+                        log::debug!("InlayHintsResponse callback");
+                        let hints = response
+                            .cast::<InlayHints>()
+                            .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
+                        editor
+                            .inline_hints(text_document_clone, &hints)
+                            .map_err(|e| LspcError::Editor(e))?;
+
+                        Ok(())
+                    }),
+                )?;
+            }
         }
 
         Ok(())
     }
 
-    fn handle_lsp_msg(
-        &mut self,
-        index: usize,
-        msg: LspMessage,
-    ) -> Result<(), LspcError> {
+    fn handle_lsp_msg(&mut self, index: usize, msg: LspMessage) -> Result<(), LspcError> {
         let lsp_handler = &mut self.lsp_handlers[index];
         match msg {
             LspMessage::Request(req) => {}
