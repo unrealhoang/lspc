@@ -1,29 +1,27 @@
 use std::{
+    fmt::Debug,
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crossbeam::channel::Receiver;
 use lsp_types::{
-    notification::Initialized,
-    request::{GotoDefinition, HoverRequest, Initialize},
-    ClientCapabilities, InitializeResult, Position, ServerCapabilities, TextDocumentIdentifier,
+    notification::Initialized, request::Request, InitializeResult, ServerCapabilities,
 };
-use url::Url;
+use serde::{de::DeserializeOwned, Serialize};
 
 use super::{
     msg::{LspMessage, RawNotification, RawRequest, RawResponse},
-    types::{InlayHints, InlayHintsParams},
     Editor, LangServerError, LspcError,
 };
 use crate::rpc;
 
-type LspCallback<E> =
-    Box<FnOnce(&mut E, &mut LangServerHandler<E>, RawResponse) -> Result<(), LspcError>>;
+pub type RawCallback<E> =
+    Box<dyn FnOnce(&mut E, &mut LangServerHandler<E>, RawResponse) -> Result<(), LspcError>>;
 
 pub struct Callback<E: Editor> {
     pub id: u64,
-    pub func: LspCallback<E>,
+    pub func: RawCallback<E>,
 }
 
 pub struct LangServerHandler<E: Editor> {
@@ -90,34 +88,6 @@ impl<E: Editor> LangServerHandler<E> {
         }
     }
 
-    pub fn initialize(
-        &mut self,
-        root: String,
-        root_url: Url,
-        capabilities: ClientCapabilities,
-        cb: LspCallback<E>,
-    ) -> Result<(), LangServerError> {
-        log::debug!(
-            "Initialize language server with capabilities: {:?}",
-            capabilities
-        );
-
-        let id = self.fetch_id();
-
-        let init_params = lsp_types::InitializeParams {
-            process_id: Some(std::process::id() as u64),
-            root_path: Some(root),
-            root_uri: Some(root_url),
-            initialization_options: None,
-            capabilities,
-            trace: None,
-            workspace_folders: None,
-        };
-        let init_request = RawRequest::new::<Initialize>(id, &init_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(init_request)
-    }
-
     pub fn initialize_response(
         &mut self,
         response: InitializeResult,
@@ -138,58 +108,29 @@ impl<E: Editor> LangServerHandler<E> {
         self.notify(initialized_notification)
     }
 
-    pub fn hover_request(
+    pub fn lsp_request<R: Request>(
         &mut self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-        cb: LspCallback<E>,
-    ) -> Result<(), LangServerError> {
-        log::debug!("Send hover request: {:?} at {:?}", text_document, position);
+        params: R::Params,
+        cb: Box<dyn FnOnce(&mut E, &mut LangServerHandler<E>, R::Result) -> Result<(), LspcError>>,
+    ) -> Result<(), LangServerError>
+    where
+        R::Params: Serialize + Debug,
+        R::Result: DeserializeOwned + 'static,
+        E: 'static,
+    {
+        log::debug!("Send LSP request: {} with {:?}", R::METHOD, params);
 
         let id = self.fetch_id();
-        let hover_params = lsp_types::TextDocumentPositionParams {
-            text_document,
-            position,
-        };
-        let hover_request = RawRequest::new::<HoverRequest>(id, &hover_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(hover_request)
-    }
-
-    pub fn goto_definition(
-        &mut self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-        cb: LspCallback<E>,
-    ) -> Result<(), LangServerError> {
-        log::debug!(
-            "Send goto definition request: {:?} at {:?}",
-            text_document,
-            position
-        );
-
-        let id = self.fetch_id();
-        let definition_params = lsp_types::TextDocumentPositionParams {
-            text_document,
-            position,
-        };
-        let definition_request = RawRequest::new::<GotoDefinition>(id, &definition_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(definition_request)
-    }
-
-    pub fn inlay_hints_request(
-        &mut self,
-        text_document: TextDocumentIdentifier,
-        cb: LspCallback<E>,
-    ) -> Result<(), LangServerError> {
-        log::debug!("Send inlay hints request: {:?}", text_document);
-
-        let id = self.fetch_id();
-        let inlay_hints_params = InlayHintsParams { text_document };
-        let inlay_hints_request = RawRequest::new::<InlayHints>(id, &inlay_hints_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(inlay_hints_request)
+        let request = RawRequest::new::<R>(id, &params);
+        let raw_callback: RawCallback<E> =
+            Box::new(move |e, handler, raw_response: RawResponse| {
+                log::debug!("{} callback", R::METHOD);
+                let response = raw_response.cast::<R>()?;
+                cb(e, handler, response)
+            });
+        let func = Box::new(raw_callback);
+        self.callbacks.push(Callback { id, func });
+        self.request(request)
     }
 
     fn request(&mut self, request: RawRequest) -> Result<(), LangServerError> {
