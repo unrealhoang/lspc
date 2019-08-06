@@ -1,12 +1,12 @@
 @startuml
 
 Editor ->> Lspc: Notify
-Lspc -> LspChannel: Notify/Request
-LspChannel ->> RpcClient: Notify/Request
+Lspc -> LangServerHandler: Notify/Request
+LangServerHandler ->> RpcClient: Notify/Request
 ...
 RpcClient ->> Lspc: Notify/Response
-Lspc -> LspChannel: Notify/Response
-LspChannel ->> Lspc: Update editor
+Lspc -> LangServerHandler: Notify/Response
+LangServerHandler ->> Lspc: Update editor
 Lspc -> Editor: Update
 Editor --> Lspc: Response
 

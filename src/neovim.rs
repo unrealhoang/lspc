@@ -22,7 +22,7 @@ use serde::{
 };
 use url::Url;
 
-use crate::lspc::{types::InlayHint, Editor, EditorError, Event};
+use crate::lspc::{types::InlayHint, Editor, EditorError, Event, LsConfig};
 use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
@@ -31,12 +31,6 @@ pub struct Neovim {
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Config {
-    pub command: Vec<String>,
-    pub root: Vec<String>,
 }
 
 pub trait ToDisplay {
@@ -116,40 +110,38 @@ impl ToDisplay for str {
 }
 
 // Todo: cut down these parsing logic by implement Deserializer for Value
-impl Config {
-    pub fn from_value(config_value: &Value) -> Option<Self> {
-        let mut root = None;
-        let mut command = None;
-        for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
-            let k = key.as_str()?;
-            Some((k, value))
-        }) {
-            if k == "command" {
-                let data = v
-                    .as_array()?
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .map(|s| String::from(s))
-                    .collect::<Vec<String>>();
+pub fn from_value(config_value: &Value) -> Option<LsConfig> {
+    let mut root = None;
+    let mut command = None;
+    for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
+        let k = key.as_str()?;
+        Some((k, value))
+    }) {
+        if k == "command" {
+            let data = v
+                .as_array()?
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|s| String::from(s))
+                .collect::<Vec<String>>();
 
-                if data.len() > 1 {
-                    command = Some(data);
-                }
-            } else if k == "root" {
-                let data = v
-                    .as_array()?
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .map(|s| String::from(s))
-                    .collect::<Vec<String>>();
-                root = Some(data);
+            if data.len() > 1 {
+                command = Some(data);
             }
+        } else if k == "root" {
+            let data = v
+                .as_array()?
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|s| String::from(s))
+                .collect::<Vec<String>>();
+            root = Some(data);
         }
-        if let (Some(root), Some(command)) = (root, command) {
-            Some(Config { root, command })
-        } else {
-            None
-        }
+    }
+    if let (Some(root), Some(command)) = (root, command) {
+        Some(LsConfig { root, command })
+    } else {
+        None
     }
 }
 
@@ -200,8 +192,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                         "Invalid lang_id param for start_lang_server",
                     ))?
                     .to_owned();
-                let config = Config::from_value(&params[1])
-                    .ok_or(EditorError::Parse("Failed to parse Config"))?;
+                let config =
+                    from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
                 let cur_path = params[2]
                     .as_str()
                     .ok_or(EditorError::Parse(
@@ -417,7 +409,7 @@ impl Editor for Neovim {
     fn say_hello(&self) -> Result<(), EditorError> {
         let params = vec!["echo 'hello from the other side'".into()];
         self.request("nvim_command", params)
-            .map_err(|e| EditorError::Timeout)?;
+            .map_err(|_| EditorError::Timeout)?;
 
         Ok(())
     }
@@ -427,18 +419,19 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn preview<D: ToDisplay>(
+    fn show_hover(
         &self,
-        text_document: TextDocumentIdentifier,
-        to_display: &D,
+        _text_document: TextDocumentIdentifier,
+        hover: &Hover,
     ) -> Result<(), EditorError> {
+        // FIXME: check current buffer is `text_document`
         let bufname = "__LanguageClient__";
-        let filetype = if let Some(ft) = &to_display.vim_filetype() {
+        let filetype = if let Some(ft) = &hover.vim_filetype() {
             ft.as_str().into()
         } else {
             Value::Nil
         };
-        let lines = to_display
+        let lines = hover
             .to_display()
             .iter()
             .map(|item| Value::from(item.as_str()))
@@ -447,7 +440,7 @@ impl Editor for Neovim {
         self.call_function(
             "lspc#command#open_hover_preview",
             vec![bufname.into(), lines, filetype],
-        );
+        )?;
 
         Ok(())
     }
@@ -457,15 +450,15 @@ impl Editor for Neovim {
         text_document: TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError> {
+        // FIXME: check current buffer is `text_document`
         let ns_id = self.create_namespace(text_document.uri.path())?;
         for hint in hints {
-            // FIXME: find correct buffer using `text_document`
             self.set_virtual_text(
                 0,
                 ns_id,
                 hint.range.start.line,
                 vec![(&hint.label, "error")],
-            );
+            )?;
         }
 
         Ok(())
