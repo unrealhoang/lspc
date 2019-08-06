@@ -228,14 +228,12 @@ impl<E: Editor> Lspc<E> {
                 };
                 lsp_handler.lsp_request::<Initialize>(
                     init_params,
-                    Box::new(
-                        |editor: &mut E, handler: &mut LangServerHandler<E>, response| {
-                            handler.initialize_response(response)?;
+                    Box::new(|editor: &mut E, handler, response| {
+                        handler.initialize_response(response)?;
 
-                            editor.message("LangServer initialized")?;
-                            Ok(())
-                        },
-                    ),
+                        editor.message("LangServer initialized")?;
+                        Ok(())
+                    }),
                 )?;
 
                 self.lsp_handlers.push(lsp_handler);
@@ -253,15 +251,13 @@ impl<E: Editor> Lspc<E> {
                 };
                 handler.lsp_request::<HoverRequest>(
                     params,
-                    Box::new(
-                        move |editor: &mut E, _handler: &mut LangServerHandler<E>, response| {
-                            if let Some(hover) = response {
-                                editor.show_hover(&text_document_clone, &hover)?;
-                            }
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(hover) = response {
+                            editor.show_hover(&text_document_clone, &hover)?;
+                        }
 
-                            Ok(())
-                        },
-                    ),
+                        Ok(())
+                    }),
                 )?;
             }
             Event::GotoDefinition {
@@ -307,14 +303,12 @@ impl<E: Editor> Lspc<E> {
                 let params = InlayHintsParams { text_document };
                 handler.lsp_request::<InlayHints>(
                     params,
-                    Box::new(
-                        move |editor: &mut E, _handler: &mut LangServerHandler<E>, response| {
-                            log::debug!("InlayHintsResponse callback");
-                            editor.inline_hints(&text_document_clone, &response)?;
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        log::debug!("InlayHintsResponse callback");
+                        editor.inline_hints(&text_document_clone, &response)?;
 
-                            Ok(())
-                        },
-                    ),
+                        Ok(())
+                    }),
                 )?;
             }
         }
