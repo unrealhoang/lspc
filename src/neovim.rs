@@ -111,7 +111,7 @@ impl ToDisplay for str {
 
 // Todo: cut down these parsing logic by implement Deserializer for Value
 pub fn from_value(config_value: &Value) -> Option<LsConfig> {
-    let mut root = None;
+    let mut root_markers = None;
     let mut command = None;
     for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
         let k = key.as_str()?;
@@ -128,18 +128,18 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
             if data.len() > 1 {
                 command = Some(data);
             }
-        } else if k == "root" {
+        } else if k == "root_markers" {
             let data = v
                 .as_array()?
                 .iter()
                 .filter_map(|item| item.as_str())
                 .map(|s| String::from(s))
                 .collect::<Vec<String>>();
-            root = Some(data);
+            root_markers = Some(data);
         }
     }
-    if let (Some(root), Some(command)) = (root, command) {
-        Some(LsConfig { root, command })
+    if let (Some(root_markers), Some(command)) = (root_markers, command) {
+        Some(LsConfig { root_markers, command })
     } else {
         None
     }

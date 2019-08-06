@@ -25,7 +25,7 @@ use self::{
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LsConfig {
     pub command: Vec<String>,
-    pub root: Vec<String>,
+    pub root_markers: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -177,7 +177,7 @@ impl<E: Editor> Lspc<E> {
                     LangServerHandler::new(lang_id, &config.command[0], &config.command[1..])
                         .map_err(|e| LspcError::LangServer(e))?;
                 let cur_path = PathBuf::from(cur_path);
-                let root = find_root_path(&cur_path, &config.root)
+                let root = find_root_path(&cur_path, &config.root_markers)
                     .map(|path| path.to_str())
                     .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?
                     .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?;

@@ -21,7 +21,7 @@ cargo build
 ```
 let g:lspc = {
       \ 'rust': {
-      \     'root': ['Cargo.lock'],
+      \     'root_markers': ['Cargo.lock'],
       \     'command': ['rustup', 'run', 'stable', 'ra_lsp_server'],
       \     },
       \ }
