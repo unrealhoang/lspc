@@ -384,7 +384,7 @@ impl Neovim {
                 ns_id.into(),
                 line.into(),
                 chunks,
-                Value::Map(Vec::new())
+                Value::Map(Vec::new()),
             ],
         )?;
 
