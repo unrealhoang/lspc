@@ -10,7 +10,8 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    Hover, HoverContents, MarkedString, MarkupContent, MarkupKind, Position, ShowMessageParams,
+    GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
+    MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
     TextDocumentIdentifier,
 };
 use rmp_serde::Deserializer;
@@ -244,6 +245,36 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
         NvimMessage::RpcNotification {
             ref method,
             ref params,
+        } if method == "goto_definition" => {
+            if params.len() < 3 {
+                Err(EditorError::Parse("Wrong amount of params for hover"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
+                    .to_owned();
+                let text_document_str = params[1]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for hover"),
+                )?;
+                let position_map = params[2]
+                    .as_map()
+                    .ok_or(EditorError::Parse("Invalid position param for hover"))?;
+                let position = to_position(position_map)
+                    .ok_or(EditorError::Parse("Can't parse position param for hover"))?;
+
+                Ok(Event::GotoDefinition {
+                    lang_id,
+                    text_document,
+                    position,
+                })
+            }
+        }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
         } if method == "inlay_hints" => {
             if params.len() < 2 {
                 Err(EditorError::Parse("Wrong amount of params for hover"))
@@ -402,7 +433,17 @@ impl Editor for Neovim {
     fn capabilities(&self) -> lsp_types::ClientCapabilities {
         lsp_types::ClientCapabilities {
             workspace: None,
-            text_document: None,
+            text_document: Some(TextDocumentClientCapabilities {
+                hover: Some(HoverCapability {
+                    dynamic_registration: None,
+                    content_format: Some(vec![MarkupKind::PlainText, MarkupKind::Markdown]),
+                }),
+                definition: Some(GotoCapability {
+                    dynamic_registration: None,
+                    link_support: None,
+                }),
+                ..Default::default()
+            }),
             window: None,
             experimental: None,
         }
@@ -423,7 +464,7 @@ impl Editor for Neovim {
 
     fn show_hover(
         &self,
-        _text_document: TextDocumentIdentifier,
+        _text_document: &TextDocumentIdentifier,
         hover: &Hover,
     ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
@@ -449,7 +490,7 @@ impl Editor for Neovim {
 
     fn inline_hints(
         &self,
-        text_document: TextDocumentIdentifier,
+        text_document: &TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
@@ -466,8 +507,24 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn show_message(&self, params: ShowMessageParams) -> Result<(), EditorError> {
+    fn show_message(&self, params: &ShowMessageParams) -> Result<(), EditorError> {
         self.command(&format!("echo '[LS-{:?}] {}'", params.typ, params.message))?;
+
+        Ok(())
+    }
+
+    fn goto(&self, location: &Location) -> Result<(), EditorError> {
+        let filepath = location
+            .uri
+            .to_file_path()
+            .map_err(|_| EditorError::CommandDataInvalid("Location URI is not file path"))?;
+        let filepath = filepath
+            .to_str()
+            .ok_or(EditorError::CommandDataInvalid("Filepath is not UTF-8"))?;
+        self.command(&format!("edit {}", filepath))?;
+        let line = location.range.start.line + 1;
+        let col = location.range.start.character + 1;
+        self.call_function("cursor", vec![line.into(), col.into()])?;
 
         Ok(())
     }

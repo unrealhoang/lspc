@@ -11,8 +11,8 @@ use std::{
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{HoverRequest, Initialize},
-    Hover, Position, ShowMessageParams, TextDocumentIdentifier,
+    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
+    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -42,6 +42,11 @@ pub enum Event {
         text_document: TextDocumentIdentifier,
         position: Position,
     },
+    GotoDefinition {
+        lang_id: String,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+    },
     InlayHints {
         lang_id: String,
         text_document: TextDocumentIdentifier,
@@ -55,6 +60,7 @@ pub enum EditorError {
     CommandDataInvalid(&'static str),
     UnexpectedResponse(String),
     UnexpectedMessage(String),
+    Failed(String),
     RootPathNotFound,
 }
 
@@ -115,15 +121,16 @@ pub trait Editor {
     fn message(&self, msg: &str) -> Result<(), EditorError>;
     fn show_hover(
         &self,
-        text_document: TextDocumentIdentifier,
+        text_document: &TextDocumentIdentifier,
         hover: &Hover,
     ) -> Result<(), EditorError>;
     fn inline_hints(
         &self,
-        text_document: TextDocumentIdentifier,
+        text_document: &TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError>;
-    fn show_message(&self, show_message_params: ShowMessageParams) -> Result<(), EditorError>;
+    fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
+    fn goto(&self, location: &Location) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -241,7 +248,39 @@ impl<E: Editor> Lspc<E> {
                         log::debug!("HoverResponse callback");
                         let response = response.cast::<HoverRequest>()?;
                         if let Some(hover) = response {
-                            editor.show_hover(text_document_clone, &hover)?;
+                            editor.show_hover(&text_document_clone, &hover)?;
+                        }
+
+                        Ok(())
+                    }),
+                )?;
+            }
+            Event::GotoDefinition {
+                lang_id,
+                text_document,
+                position,
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                handler.goto_definition(
+                    text_document,
+                    position,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        log::debug!("GotoDefinition callback");
+                        let response = response.cast::<GotoDefinition>()?;
+                        if let Some(definition) = response {
+                            match definition {
+                                GotoDefinitionResponse::Scalar(location) => {
+                                    editor.goto(&location)?;
+                                }
+                                GotoDefinitionResponse::Array(array) => {
+                                    if array.len() == 1 {
+                                        editor.goto(&array[0])?;
+                                    }
+                                }
+                                _ => {
+                                    // FIXME: support Array & Link
+                                }
+                            }
                         }
 
                         Ok(())
@@ -260,7 +299,7 @@ impl<E: Editor> Lspc<E> {
                         log::debug!("InlayHintsResponse callback");
                         let hints = response.cast::<InlayHints>()?;
 
-                        editor.inline_hints(text_document_clone, &hints)?;
+                        editor.inline_hints(&text_document_clone, &hints)?;
 
                         Ok(())
                     }),
@@ -278,7 +317,7 @@ impl<E: Editor> Lspc<E> {
             LspMessage::Notification(mut noti) => {
                 noti = match noti.cast::<ShowMessage>() {
                     Ok(params) => {
-                        self.editor.show_message(params)?;
+                        self.editor.show_message(&params)?;
 
                         return Ok(());
                     }
