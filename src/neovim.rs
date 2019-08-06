@@ -10,7 +10,8 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    Hover, HoverContents, MarkedString, MarkupContent, MarkupKind, Position, TextDocumentIdentifier,
+    Hover, HoverContents, MarkedString, MarkupContent, MarkupKind, Position, ShowMessageParams,
+    TextDocumentIdentifier,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -139,7 +140,10 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
         }
     }
     if let (Some(root_markers), Some(command)) = (root_markers, command) {
-        Some(LsConfig { root_markers, command })
+        Some(LsConfig {
+            root_markers,
+            command,
+        })
     } else {
         None
     }
@@ -328,8 +332,6 @@ impl Neovim {
             method: method.into(),
             params,
         };
-        log::debug!("NVIM > {:?}", noti);
-
         // FIXME: add RpcQueueFull to EditorError??
         self.rpc_client.sender.send(noti).unwrap();
 
@@ -460,6 +462,12 @@ impl Editor for Neovim {
                 vec![(&hint.label, "error")],
             )?;
         }
+
+        Ok(())
+    }
+
+    fn show_message(&self, params: ShowMessageParams) -> Result<(), EditorError> {
+        self.command(&format!("echo '[LS-{:?}] {}'", params.typ, params.message))?;
 
         Ok(())
     }
