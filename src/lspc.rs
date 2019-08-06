@@ -20,7 +20,7 @@ use url::Url;
 use self::{
     handler::LangServerHandler,
     msg::{LspMessage, RawNotification, RawRequest, RawResponse},
-    types::{InlayHint, InlayHints},
+    types::{InlayHint, InlayHints, InlayHintsParams},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ pub enum LspcError {
     NotStarted,
 }
 
-pub trait Editor {
+pub trait Editor: 'static {
     fn events(&self) -> Receiver<Event>;
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
@@ -217,19 +217,25 @@ impl<E: Editor> Lspc<E> {
                 let root_url =
                     to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
 
-                lsp_handler.initialize(
-                    root.to_owned(),
-                    root_url,
+                let init_params = lsp_types::InitializeParams {
+                    process_id: Some(std::process::id() as u64),
+                    root_path: Some(root.into()),
+                    root_uri: Some(root_url),
+                    initialization_options: None,
                     capabilities,
-                    Box::new(move |editor: &mut E, handler, response| {
-                        log::debug!("InitializeResponse callback");
-                        let response = response.cast::<Initialize>()?;
+                    trace: None,
+                    workspace_folders: None,
+                };
+                lsp_handler.lsp_request::<Initialize>(
+                    init_params,
+                    Box::new(
+                        |editor: &mut E, handler: &mut LangServerHandler<E>, response| {
+                            handler.initialize_response(response)?;
 
-                        handler.initialize_response(response)?;
-
-                        editor.message("LangServer initialized")?;
-                        Ok(())
-                    }),
+                            editor.message("LangServer initialized")?;
+                            Ok(())
+                        },
+                    ),
                 )?;
 
                 self.lsp_handlers.push(lsp_handler);
@@ -241,18 +247,21 @@ impl<E: Editor> Lspc<E> {
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let text_document_clone = text_document.clone();
-                handler.hover_request(
+                let params = lsp_types::TextDocumentPositionParams {
                     text_document,
                     position,
-                    Box::new(move |editor: &mut E, _handler, response| {
-                        log::debug!("HoverResponse callback");
-                        let response = response.cast::<HoverRequest>()?;
-                        if let Some(hover) = response {
-                            editor.show_hover(&text_document_clone, &hover)?;
-                        }
+                };
+                handler.lsp_request::<HoverRequest>(
+                    params,
+                    Box::new(
+                        move |editor: &mut E, _handler: &mut LangServerHandler<E>, response| {
+                            if let Some(hover) = response {
+                                editor.show_hover(&text_document_clone, &hover)?;
+                            }
 
-                        Ok(())
-                    }),
+                            Ok(())
+                        },
+                    ),
                 )?;
             }
             Event::GotoDefinition {
@@ -261,12 +270,14 @@ impl<E: Editor> Lspc<E> {
                 position,
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
-                handler.goto_definition(
+                let params = lsp_types::TextDocumentPositionParams {
                     text_document,
                     position,
+                };
+                handler.lsp_request::<GotoDefinition>(
+                    params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         log::debug!("GotoDefinition callback");
-                        let response = response.cast::<GotoDefinition>()?;
                         if let Some(definition) = response {
                             match definition {
                                 GotoDefinitionResponse::Scalar(location) => {
@@ -293,16 +304,17 @@ impl<E: Editor> Lspc<E> {
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let text_document_clone = text_document.clone();
-                handler.inlay_hints_request(
-                    text_document,
-                    Box::new(move |editor: &mut E, _handler, response| {
-                        log::debug!("InlayHintsResponse callback");
-                        let hints = response.cast::<InlayHints>()?;
+                let params = InlayHintsParams { text_document };
+                handler.lsp_request::<InlayHints>(
+                    params,
+                    Box::new(
+                        move |editor: &mut E, _handler: &mut LangServerHandler<E>, response| {
+                            log::debug!("InlayHintsResponse callback");
+                            editor.inline_hints(&text_document_clone, &response)?;
 
-                        editor.inline_hints(&text_document_clone, &hints)?;
-
-                        Ok(())
-                    }),
+                            Ok(())
+                        },
+                    ),
                 )?;
             }
         }
