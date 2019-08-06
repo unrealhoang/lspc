@@ -1,30 +1,40 @@
-mod handler;
+pub mod handler;
 // Custom LSP types
+pub mod msg;
 pub mod types;
 
 use std::{
+    io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
-use self::types::{InlayHint, InlayHints, InlayHintsParams};
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
-    notification::Initialized,
     request::{HoverRequest, Initialize},
-    ClientCapabilities, Position, ServerCapabilities, TextDocumentIdentifier,
+    Position, TextDocumentIdentifier,
 };
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-use self::handler::{LspChannel, LspError, LspMessage, RawNotification, RawRequest, RawResponse};
-use crate::neovim::{Config, ToDisplay};
+use self::{
+    handler::LangServerHandler,
+    msg::LspMessage,
+    types::{InlayHint, InlayHints},
+};
+use crate::neovim::ToDisplay;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LsConfig {
+    pub command: Vec<String>,
+    pub root: Vec<String>,
+}
 
 #[derive(Debug)]
 pub enum Event {
     Hello,
     StartServer {
         lang_id: String,
-        config: Config,
+        config: LsConfig,
         cur_path: String,
     },
     Hover {
@@ -48,10 +58,29 @@ pub enum EditorError {
     RootPathNotFound,
 }
 
+impl From<EditorError> for LspcError {
+    fn from(e: EditorError) -> Self {
+        LspcError::Editor(e)
+    }
+}
+
+#[derive(Debug)]
+pub enum LangServerError {
+    Process(io::Error),
+    ServerDisconnected,
+    InvalidResponse,
+}
+
+impl From<LangServerError> for LspcError {
+    fn from(lse: LangServerError) -> Self {
+        LspcError::LangServer(lse)
+    }
+}
+
 #[derive(Debug)]
 pub enum LspcError {
     Editor(EditorError),
-    LangServer(LspError),
+    LangServer(LangServerError),
     // Requested lang_id server is not started
     NotStarted,
 }
@@ -73,126 +102,9 @@ pub trait Editor {
     ) -> Result<(), EditorError>;
 }
 
-type LspCallback<E> = Box<FnOnce(&mut E, &mut LspHandler<E>, RawResponse) -> Result<(), LspcError>>;
-
-pub struct Callback<E: Editor> {
-    pub id: u64,
-    pub func: LspCallback<E>,
-}
-
-pub struct LspHandler<E: Editor> {
-    lang_id: String,
-    channel: LspChannel,
-    callbacks: Vec<Callback<E>>,
-    next_id: AtomicU64,
-    // None if server is not started
-    server_capabilities: Option<ServerCapabilities>,
-}
-
-impl<E: Editor> LspHandler<E> {
-    fn new(lang_id: String, channel: LspChannel) -> Self {
-        LspHandler {
-            lang_id,
-            channel,
-            next_id: AtomicU64::new(1),
-            callbacks: Vec::new(),
-            server_capabilities: None,
-        }
-    }
-
-    fn fetch_id(&self) -> u64 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
-    }
-
-    fn initialize(
-        &mut self,
-        root: String,
-        capabilities: ClientCapabilities,
-        cb: LspCallback<E>,
-    ) -> Result<(), LspcError> {
-        log::debug!(
-            "Initialize language server with capabilities: {:?}",
-            capabilities
-        );
-
-        let id = self.fetch_id();
-        let root_url =
-            to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
-
-        let init_params = lsp_types::InitializeParams {
-            process_id: Some(std::process::id() as u64),
-            root_path: Some(root),
-            root_uri: Some(root_url),
-            initialization_options: None,
-            capabilities,
-            trace: None,
-            workspace_folders: None,
-        };
-        let init_request = RawRequest::new::<Initialize>(id, &init_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(init_request)
-    }
-
-    fn initialized(&mut self) -> Result<(), LspcError> {
-        log::debug!("Sending initialized notification");
-        let initialized_params = lsp_types::InitializedParams {};
-        let initialized_notification = RawNotification::new::<Initialized>(&initialized_params);
-
-        self.notify(initialized_notification)
-    }
-
-    fn hover_request(
-        &mut self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-        cb: LspCallback<E>,
-    ) -> Result<(), LspcError> {
-        log::debug!("Send hover request: {:?} at {:?}", text_document, position);
-
-        let id = self.fetch_id();
-        let hover_params = lsp_types::TextDocumentPositionParams {
-            text_document,
-            position,
-        };
-        let hover_request = RawRequest::new::<HoverRequest>(id, &hover_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(hover_request)
-    }
-
-    fn inlay_hints_request(
-        &mut self,
-        text_document: TextDocumentIdentifier,
-        cb: LspCallback<E>,
-    ) -> Result<(), LspcError> {
-        log::debug!("Send inlay hints request: {:?}", text_document);
-
-        let id = self.fetch_id();
-        let inlay_hints_params = InlayHintsParams { text_document };
-        let inlay_hints_request = RawRequest::new::<InlayHints>(id, &inlay_hints_params);
-        self.callbacks.push(Callback { id, func: cb });
-        self.request(inlay_hints_request)
-    }
-
-    fn request(&mut self, request: RawRequest) -> Result<(), LspcError> {
-        self.channel
-            .send_msg(LspMessage::Request(request))
-            .map_err(|e| LspcError::LangServer(e))?;
-
-        Ok(())
-    }
-
-    fn notify(&mut self, not: RawNotification) -> Result<(), LspcError> {
-        self.channel
-            .send_msg(LspMessage::Notification(not))
-            .map_err(|e| LspcError::LangServer(e))?;
-
-        Ok(())
-    }
-}
-
 pub struct Lspc<E: Editor> {
     editor: E,
-    lsp_handlers: Vec<LspHandler<E>>,
+    lsp_handlers: Vec<LangServerHandler<E>>,
 }
 
 #[derive(Debug)]
@@ -203,12 +115,12 @@ enum SelectedMsg {
 
 fn select<E: Editor>(
     event_receiver: &Receiver<Event>,
-    handlers: &Vec<LspHandler<E>>,
+    handlers: &Vec<LangServerHandler<E>>,
 ) -> SelectedMsg {
     let mut sel = Select::new();
     sel.recv(event_receiver);
     for lsp_client in handlers.iter() {
-        sel.recv(&lsp_client.channel.receiver());
+        sel.recv(&lsp_client.receiver());
     }
 
     let oper = sel.select();
@@ -218,7 +130,7 @@ fn select<E: Editor>(
             SelectedMsg::Editor(nvim_msg)
         }
         i => {
-            let lsp_msg = oper.recv(handlers[i - 1].channel.receiver()).unwrap();
+            let lsp_msg = oper.recv(handlers[i - 1].receiver()).unwrap();
 
             SelectedMsg::Lsp(i - 1, lsp_msg)
         }
@@ -245,7 +157,7 @@ fn to_file_url(s: &str) -> Option<Url> {
 }
 
 impl<E: Editor> Lspc<E> {
-    fn handler_for(&mut self, lang_id: &str) -> Option<&mut LspHandler<E>> {
+    fn handler_for(&mut self, lang_id: &str) -> Option<&mut LangServerHandler<E>> {
         self.lsp_handlers
             .iter_mut()
             .find(|handler| handler.lang_id == lang_id)
@@ -262,31 +174,31 @@ impl<E: Editor> Lspc<E> {
                 cur_path,
             } => {
                 let capabilities = self.editor.capabilities();
-                let channel =
-                    LspChannel::new(lang_id.clone(), &config.command[0], &config.command[1..])
+                let mut lsp_handler =
+                    LangServerHandler::new(lang_id, &config.command[0], &config.command[1..])
                         .map_err(|e| LspcError::LangServer(e))?;
-                let mut lsp_handler = LspHandler::new(lang_id, channel);
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root)
                     .map(|path| path.to_str())
                     .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?
                     .ok_or_else(|| LspcError::Editor(EditorError::RootPathNotFound))?;
 
+                let root_url =
+                    to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
+
                 lsp_handler.initialize(
                     root.to_owned(),
+                    root_url,
                     capabilities,
                     Box::new(move |editor: &mut E, handler, response| {
                         log::debug!("InitializeResponse callback");
                         let response = response
                             .cast::<Initialize>()
-                            .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
-                        let server_capabilities = response.capabilities;
-                        handler.server_capabilities = Some(server_capabilities);
-                        editor
-                            .message("LangServer initialized")
-                            .map_err(|e| LspcError::Editor(e))?;
+                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
 
-                        handler.initialized()?;
+                        handler.initialize_response(response)?;
+
+                        editor.message("LangServer initialized")?;
                         Ok(())
                     }),
                 )?;
@@ -303,15 +215,13 @@ impl<E: Editor> Lspc<E> {
                 handler.hover_request(
                     text_document,
                     position,
-                    Box::new(move |editor: &mut E, handler, response| {
+                    Box::new(move |editor: &mut E, _handler, response| {
                         log::debug!("HoverResponse callback");
                         let response = response
                             .cast::<HoverRequest>()
-                            .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
+                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
                         if let Some(hover) = response {
-                            editor
-                                .preview(text_document_clone, &hover)
-                                .map_err(|e| LspcError::Editor(e))?;
+                            editor.preview(text_document_clone, &hover)?;
                         }
 
                         Ok(())
@@ -326,14 +236,12 @@ impl<E: Editor> Lspc<E> {
                 let text_document_clone = text_document.clone();
                 handler.inlay_hints_request(
                     text_document,
-                    Box::new(move |editor: &mut E, handler, response| {
+                    Box::new(move |editor: &mut E, _handler, response| {
                         log::debug!("InlayHintsResponse callback");
                         let hints = response
                             .cast::<InlayHints>()
-                            .map_err(|_| LspcError::LangServer(LspError::InvalidResponse))?;
-                        editor
-                            .inline_hints(text_document_clone, &hints)
-                            .map_err(|e| LspcError::Editor(e))?;
+                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
+                        editor.inline_hints(text_document_clone, &hints)?;
 
                         Ok(())
                     }),
@@ -347,15 +255,13 @@ impl<E: Editor> Lspc<E> {
     fn handle_lsp_msg(&mut self, index: usize, msg: LspMessage) -> Result<(), LspcError> {
         let lsp_handler = &mut self.lsp_handlers[index];
         match msg {
-            LspMessage::Request(req) => {}
-            LspMessage::Notification(notification) => {}
+            LspMessage::Request(_req) => {}
+            LspMessage::Notification(_notification) => {}
             LspMessage::Response(res) => {
-                let cb_index = lsp_handler.callbacks.iter().position(|cb| cb.id == res.id);
-                if let Some(index) = cb_index {
-                    let callback = lsp_handler.callbacks.swap_remove(index);
+                if let Some(callback) = lsp_handler.callback_for(res.id) {
                     (callback.func)(&mut self.editor, lsp_handler, res)?;
                 } else {
-                    log::error!("Unhandled response: {:?}", res);
+                    log::error!("not requested response: {:?}", res);
                 }
             }
         }
