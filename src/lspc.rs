@@ -273,7 +273,6 @@ impl<E: Editor> Lspc<E> {
                 handler.lsp_request::<GotoDefinition>(
                     params,
                     Box::new(move |editor: &mut E, _handler, response| {
-                        log::debug!("GotoDefinition callback");
                         if let Some(definition) = response {
                             match definition {
                                 GotoDefinitionResponse::Scalar(location) => {
@@ -304,7 +303,6 @@ impl<E: Editor> Lspc<E> {
                 handler.lsp_request::<InlayHints>(
                     params,
                     Box::new(move |editor: &mut E, _handler, response| {
-                        log::debug!("InlayHintsResponse callback");
                         editor.inline_hints(&text_document_clone, &response)?;
 
                         Ok(())
