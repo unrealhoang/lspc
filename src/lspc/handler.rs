@@ -6,8 +6,8 @@ use std::{
 use crossbeam::channel::Receiver;
 use lsp_types::{
     notification::Initialized,
-    request::{HoverRequest, Initialize},
-    ClientCapabilities, InitializeResult, Position, ServerCapabilities, TextDocumentIdentifier,
+    request::{HoverRequest, Initialize, GotoDefinition},
+    ClientCapabilities, InitializeResult, Position, ServerCapabilities, TextDocumentIdentifier
 };
 use url::Url;
 
@@ -154,6 +154,24 @@ impl<E: Editor> LangServerHandler<E> {
         let hover_request = RawRequest::new::<HoverRequest>(id, &hover_params);
         self.callbacks.push(Callback { id, func: cb });
         self.request(hover_request)
+    }
+
+    pub fn goto_definition(
+        &mut self,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+        cb: LspCallback<E>,
+    ) -> Result<(), LangServerError> {
+        log::debug!("Send goto definition request: {:?} at {:?}", text_document, position);
+
+        let id = self.fetch_id();
+        let definition_params = lsp_types::TextDocumentPositionParams {
+            text_document,
+            position,
+        };
+        let definition_request = RawRequest::new::<GotoDefinition>(id, &definition_params);
+        self.callbacks.push(Callback { id, func: cb });
+        self.request(definition_request)
     }
 
     pub fn inlay_hints_request(
