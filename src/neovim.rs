@@ -419,19 +419,19 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn preview<D: ToDisplay>(
+    fn show_hover(
         &self,
         _text_document: TextDocumentIdentifier,
-        to_display: &D,
+        hover: &Hover,
     ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
         let bufname = "__LanguageClient__";
-        let filetype = if let Some(ft) = &to_display.vim_filetype() {
+        let filetype = if let Some(ft) = &hover.vim_filetype() {
             ft.as_str().into()
         } else {
             Value::Nil
         };
-        let lines = to_display
+        let lines = hover
             .to_display()
             .iter()
             .map(|item| Value::from(item.as_str()))

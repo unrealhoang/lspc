@@ -11,7 +11,7 @@ use std::{
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     request::{HoverRequest, Initialize},
-    Position, TextDocumentIdentifier,
+    Position, TextDocumentIdentifier, Hover
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -21,7 +21,6 @@ use self::{
     msg::LspMessage,
     types::{InlayHint, InlayHints},
 };
-use crate::neovim::ToDisplay;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LsConfig {
@@ -90,10 +89,10 @@ pub trait Editor {
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
     fn message(&self, msg: &str) -> Result<(), EditorError>;
-    fn preview<D: ToDisplay>(
+    fn show_hover(
         &self,
         text_document: TextDocumentIdentifier,
-        to_display: &D,
+        hover: &Hover,
     ) -> Result<(), EditorError>;
     fn inline_hints(
         &self,
@@ -221,7 +220,7 @@ impl<E: Editor> Lspc<E> {
                             .cast::<HoverRequest>()
                             .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
                         if let Some(hover) = response {
-                            editor.preview(text_document_clone, &hover)?;
+                            editor.show_hover(text_document_clone, &hover)?;
                         }
 
                         Ok(())
