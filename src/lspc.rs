@@ -11,8 +11,8 @@ use std::{
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{HoverRequest, Initialize, GotoDefinition, GotoDefinitionResponse},
-    Hover, Position, ShowMessageParams, TextDocumentIdentifier, Location
+    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
+    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;

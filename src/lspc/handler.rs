@@ -6,8 +6,8 @@ use std::{
 use crossbeam::channel::Receiver;
 use lsp_types::{
     notification::Initialized,
-    request::{HoverRequest, Initialize, GotoDefinition},
-    ClientCapabilities, InitializeResult, Position, ServerCapabilities, TextDocumentIdentifier
+    request::{GotoDefinition, HoverRequest, Initialize},
+    ClientCapabilities, InitializeResult, Position, ServerCapabilities, TextDocumentIdentifier,
 };
 use url::Url;
 
@@ -162,7 +162,11 @@ impl<E: Editor> LangServerHandler<E> {
         position: Position,
         cb: LspCallback<E>,
     ) -> Result<(), LangServerError> {
-        log::debug!("Send goto definition request: {:?} at {:?}", text_document, position);
+        log::debug!(
+            "Send goto definition request: {:?} at {:?}",
+            text_document,
+            position
+        );
 
         let id = self.fetch_id();
         let definition_params = lsp_types::TextDocumentPositionParams {

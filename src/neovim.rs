@@ -10,9 +10,9 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    Hover, HoverContents, MarkedString, MarkupContent, MarkupKind, Position, ShowMessageParams,
-    TextDocumentIdentifier, TextDocumentClientCapabilities, GotoCapability, HoverCapability,
-    Location
+    GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
+    MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
+    TextDocumentIdentifier,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -436,11 +436,11 @@ impl Editor for Neovim {
             text_document: Some(TextDocumentClientCapabilities {
                 hover: Some(HoverCapability {
                     dynamic_registration: None,
-                    content_format: Some(vec![MarkupKind::PlainText, MarkupKind::Markdown])
+                    content_format: Some(vec![MarkupKind::PlainText, MarkupKind::Markdown]),
                 }),
                 definition: Some(GotoCapability {
                     dynamic_registration: None,
-                    link_support: None
+                    link_support: None,
                 }),
                 ..Default::default()
             }),
@@ -514,10 +514,13 @@ impl Editor for Neovim {
     }
 
     fn goto(&self, location: &Location) -> Result<(), EditorError> {
-        let filepath = location.uri.to_file_path()
+        let filepath = location
+            .uri
+            .to_file_path()
             .map_err(|_| EditorError::CommandDataInvalid("Location URI is not file path"))?;
         let filepath = filepath
-            .to_str().ok_or(EditorError::CommandDataInvalid("Filepath is not UTF-8"))?;
+            .to_str()
+            .ok_or(EditorError::CommandDataInvalid("Filepath is not UTF-8"))?;
         self.command(&format!("edit {}", filepath))?;
         let line = location.range.start.line + 1;
         let col = location.range.start.character + 1;
