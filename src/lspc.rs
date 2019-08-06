@@ -10,15 +10,16 @@ use std::{
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
+    notification::ShowMessage,
     request::{HoverRequest, Initialize},
-    Position, TextDocumentIdentifier, Hover
+    Hover, Position, ShowMessageParams, TextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use self::{
     handler::LangServerHandler,
-    msg::LspMessage,
+    msg::{LspMessage, RawNotification, RawRequest, RawResponse},
     types::{InlayHint, InlayHints},
 };
 
@@ -67,12 +68,35 @@ impl From<EditorError> for LspcError {
 pub enum LangServerError {
     Process(io::Error),
     ServerDisconnected,
-    InvalidResponse,
+    InvalidRequest(String),
+    InvalidNotification(String),
+    InvalidResponse(String),
 }
 
-impl From<LangServerError> for LspcError {
-    fn from(lse: LangServerError) -> Self {
-        LspcError::LangServer(lse)
+impl From<RawRequest> for LangServerError {
+    fn from(r: RawRequest) -> Self {
+        LangServerError::InvalidRequest(format!("{:?}", r))
+    }
+}
+
+impl From<RawNotification> for LangServerError {
+    fn from(r: RawNotification) -> Self {
+        LangServerError::InvalidNotification(format!("{:?}", r))
+    }
+}
+
+impl From<RawResponse> for LangServerError {
+    fn from(r: RawResponse) -> Self {
+        LangServerError::InvalidResponse(format!("{:?}", r))
+    }
+}
+
+impl<T> From<T> for LspcError
+where
+    T: Into<LangServerError>,
+{
+    fn from(r: T) -> Self {
+        LspcError::LangServer(r.into())
     }
 }
 
@@ -99,6 +123,7 @@ pub trait Editor {
         text_document: TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError>;
+    fn show_message(&self, show_message_params: ShowMessageParams) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -191,9 +216,7 @@ impl<E: Editor> Lspc<E> {
                     capabilities,
                     Box::new(move |editor: &mut E, handler, response| {
                         log::debug!("InitializeResponse callback");
-                        let response = response
-                            .cast::<Initialize>()
-                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
+                        let response = response.cast::<Initialize>()?;
 
                         handler.initialize_response(response)?;
 
@@ -216,9 +239,7 @@ impl<E: Editor> Lspc<E> {
                     position,
                     Box::new(move |editor: &mut E, _handler, response| {
                         log::debug!("HoverResponse callback");
-                        let response = response
-                            .cast::<HoverRequest>()
-                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
+                        let response = response.cast::<HoverRequest>()?;
                         if let Some(hover) = response {
                             editor.show_hover(text_document_clone, &hover)?;
                         }
@@ -237,9 +258,8 @@ impl<E: Editor> Lspc<E> {
                     text_document,
                     Box::new(move |editor: &mut E, _handler, response| {
                         log::debug!("InlayHintsResponse callback");
-                        let hints = response
-                            .cast::<InlayHints>()
-                            .map_err(|_| LspcError::LangServer(LangServerError::InvalidResponse))?;
+                        let hints = response.cast::<InlayHints>()?;
+
                         editor.inline_hints(text_document_clone, &hints)?;
 
                         Ok(())
@@ -255,7 +275,18 @@ impl<E: Editor> Lspc<E> {
         let lsp_handler = &mut self.lsp_handlers[index];
         match msg {
             LspMessage::Request(_req) => {}
-            LspMessage::Notification(_notification) => {}
+            LspMessage::Notification(mut noti) => {
+                noti = match noti.cast::<ShowMessage>() {
+                    Ok(params) => {
+                        self.editor.show_message(params)?;
+
+                        return Ok(());
+                    }
+                    Err(noti) => noti,
+                };
+
+                log::warn!("Not supported notification: {:?}", noti);
+            }
             LspMessage::Response(res) => {
                 if let Some(callback) = lsp_handler.callback_for(res.id) {
                     (callback.func)(&mut self.editor, lsp_handler, res)?;
