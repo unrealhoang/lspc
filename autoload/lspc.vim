@@ -57,6 +57,12 @@ function! lspc#hover()
   call rpcnotify(s:job_id, 'hover', l:lang_id, l:cur_path, l:position)
 endfunction
 
+function! lspc#inlay_hints()
+  let l:lang_id = 'rust'
+  let l:cur_path = lspc#buffer#filename()
+  call rpcnotify(s:job_id, 'inlay_hints', l:lang_id, l:cur_path)
+endfunction
+
 function! lspc#hello_from_the_other_side()
   call rpcnotify(s:job_id, 'hello')
 endfunction
