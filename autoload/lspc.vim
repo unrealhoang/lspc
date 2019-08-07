@@ -70,6 +70,12 @@ function! lspc#inlay_hints()
   call rpcnotify(s:job_id, 'inlay_hints', l:lang_id, l:cur_path)
 endfunction
 
+function! lspc#format_doc()
+  let l:lang_id = 'rust'
+  let l:cur_path = lspc#buffer#filename()
+  call rpcnotify(s:job_id, 'format_doc', l:lang_id, l:cur_path)
+endfunction
+
 function! lspc#hello_from_the_other_side()
   call rpcnotify(s:job_id, 'hello')
 endfunction
@@ -77,4 +83,3 @@ endfunction
 function! lspc#debug()
   echo "Output Buffer: " . s:output_buffer
 endfunction
-

@@ -4,7 +4,7 @@ use std::{
     io::{BufRead, Write},
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::Duration
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -12,7 +12,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use lsp_types::{
     GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
     MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
-    TextDocumentIdentifier,
+    TextDocumentIdentifier, TextEdit
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -296,6 +296,30 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                 })
             }
         }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "format_doc" => {
+            if params.len() < 1 {
+                Err(EditorError::Parse("Wrong amount of params for format document"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for format document"))?
+                    .to_owned();
+                let text_document_str = params[1]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid text_document param for format document"))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for format document"),
+                )?;
+
+                Ok(Event::FormatDoc {
+                    lang_id,
+                    text_document,
+                })
+            }
+        }
         _ => Err(EditorError::UnexpectedMessage(format!("{:?}", msg))),
     }
 }
@@ -526,6 +550,14 @@ impl Editor for Neovim {
         let col = location.range.start.character + 1;
         self.call_function("cursor", vec![line.into(), col.into()])?;
 
+        Ok(())
+    }
+
+    fn apply_edit(
+        &self,
+        edits: &Vec<TextEdit>
+    ) -> Result<(), EditorError> {
+        // TODO: Do edit here
         Ok(())
     }
 }

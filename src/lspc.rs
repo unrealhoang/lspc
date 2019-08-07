@@ -6,13 +6,15 @@ pub mod types;
 use std::{
     io,
     path::{Path, PathBuf},
+    collections::HashMap
 };
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
-    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier,
+    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize, Formatting},
+    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier, DocumentFormattingParams,
+    FormattingOptions, TextEdit
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -51,6 +53,10 @@ pub enum Event {
         lang_id: String,
         text_document: TextDocumentIdentifier,
     },
+    FormatDoc {
+        lang_id: String,
+        text_document: TextDocumentIdentifier,
+    }
 }
 
 #[derive(Debug)]
@@ -131,6 +137,7 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
     fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&self, location: &Location) -> Result<(), EditorError>;
+    fn apply_edit(&self, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -307,6 +314,28 @@ impl<E: Editor> Lspc<E> {
 
                         Ok(())
                     }),
+                )?;
+            }
+            Event::FormatDoc {
+                lang_id,
+                text_document
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let options = FormattingOptions {
+                    tab_size: 4,
+                    insert_spaces: true,
+                    properties: HashMap::new(),
+                };
+                let params = DocumentFormattingParams { text_document, options };
+                handler.lsp_request::<Formatting>(
+                    params,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(edits) = response {
+                            editor.apply_edit(&edits)?;
+                        }
+
+                        Ok(())
+                    })
                 )?;
             }
         }
