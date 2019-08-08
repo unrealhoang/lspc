@@ -566,22 +566,37 @@ impl Editor for Neovim {
         lines: &Vec<String>,
         edits: &Vec<TextEdit>
     ) -> Result<(), EditorError> {
+        let mut editted_content = lines.join("\n");
+
         for edit in edits {
             let start_line: usize = edit.range.start.line as usize;
             let start_char: usize = edit.range.start.character as usize;
             let end_line: usize = edit.range.end.line as usize;
             let end_char: usize = edit.range.end.character as usize;
-            let edit_lines = &lines[start_line..end_line + 1];
-            let start_part = &edit_lines[0][..start_char];
-            let end_part = &edit_lines[edit_lines.len() - 1][end_char..];
-            let new_text = format!("{}{}{}", start_part, edit.new_text, end_part);
-            self.call_function(
-                "setline",
-                vec![
-                    (start_line + 1).into(), // +1 cuz setline line start from 1
-                    Value::Array(new_text.split("\n").map(|s| s.into()).collect())
-                ])?;
+        
+            let start_index = &lines[..start_line]
+                .iter()
+                .map(String::len)
+                .fold(0, |acc, current| acc + current + 1) + start_char;
+            let end_index = &lines[..end_line]
+                .iter()
+                .map(String::len)
+                .fold(0, |acc, current| acc + current + 1) + end_char;
+
+            editted_content = format!(
+                "{}{}{}",
+                &editted_content[..start_index],
+                edit.new_text,
+                &editted_content[end_index..]
+            );
         }
+
+        let output_lines = Value::Array(editted_content
+            .lines()
+            .map(|line| line.into())
+            .collect());
+        self.command("1,$d")?; 
+        self.call_function("setline", vec![1.into(), output_lines])?;
         Ok(())
     }
 }

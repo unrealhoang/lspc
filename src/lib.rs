@@ -2,6 +2,6 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 
 pub mod lspc;
 pub mod neovim;
-pub mod rpc;
 
+pub mod rpc;
 pub use lspc::Lspc;
