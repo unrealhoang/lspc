@@ -314,9 +314,17 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     EditorError::Parse("Can't parse text_document param for format document"),
                 )?;
 
+                let text_document_lines: Vec<String> = params[2]
+                    .as_array()
+                    .ok_or(EditorError::Parse("Invalid text_document_lines param for format document"))?
+                    .into_iter()
+                    .map(|line| line.as_str().unwrap().to_owned())
+                    .collect();
+
                 Ok(Event::FormatDoc {
                     lang_id,
                     text_document,
+                    text_document_lines
                 })
             }
         }
@@ -553,11 +561,27 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn apply_edit(
+    fn apply_edits(
         &self,
+        lines: &Vec<String>,
         edits: &Vec<TextEdit>
     ) -> Result<(), EditorError> {
-        // TODO: Do edit here
+        for edit in edits {
+            let start_line: usize = edit.range.start.line as usize;
+            let start_char: usize = edit.range.start.character as usize;
+            let end_line: usize = edit.range.end.line as usize;
+            let end_char: usize = edit.range.end.character as usize;
+            let edit_lines = &lines[start_line..end_line + 1];
+            let start_part = &edit_lines[0][..start_char];
+            let end_part = &edit_lines[edit_lines.len() - 1][end_char..];
+            let new_text = format!("{}{}{}", start_part, edit.new_text, end_part);
+            self.call_function(
+                "setline",
+                vec![
+                    (start_line + 1).into(), // +1 cuz setline line start from 1
+                    Value::Array(new_text.split("\n").map(|s| s.into()).collect())
+                ])?;
+        }
         Ok(())
     }
 }

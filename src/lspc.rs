@@ -55,6 +55,7 @@ pub enum Event {
     },
     FormatDoc {
         lang_id: String,
+        text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     }
 }
@@ -137,7 +138,7 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
     fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&self, location: &Location) -> Result<(), EditorError>;
-    fn apply_edit(&self, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -318,6 +319,7 @@ impl<E: Editor> Lspc<E> {
             }
             Event::FormatDoc {
                 lang_id,
+                text_document_lines,
                 text_document
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
@@ -331,7 +333,7 @@ impl<E: Editor> Lspc<E> {
                     params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(edits) = response {
-                            editor.apply_edit(&edits)?;
+                            editor.apply_edits(&text_document_lines, &edits)?;
                         }
 
                         Ok(())
