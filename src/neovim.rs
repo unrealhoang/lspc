@@ -4,7 +4,7 @@ use std::{
     io::{BufRead, Write},
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
-    time::Duration
+    time::Duration,
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -148,6 +148,13 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     } else {
         None
     }
+}
+
+fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
+    lines[..pos.line as usize]
+        .iter()
+        .map(String::len)
+        .fold(0, |acc, current| acc + current + 1) + pos.character as usize
 }
 
 fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -566,37 +573,49 @@ impl Editor for Neovim {
         lines: &Vec<String>,
         edits: &Vec<TextEdit>
     ) -> Result<(), EditorError> {
+        let mut sorted_edits = edits.clone();
         let mut editted_content = lines.join("\n");
+        sorted_edits.sort_by(|a, b| {
+            match a.range.start.line.cmp(&b.range.start.line) {
+                std::cmp::Ordering::Equal => a.range.start.character.cmp(&b.range.start.character),
+                other => other
+            }
+        });
 
-        for edit in edits {
-            let start_line: usize = edit.range.start.line as usize;
-            let start_char: usize = edit.range.start.character as usize;
-            let end_line: usize = edit.range.end.line as usize;
-            let end_char: usize = edit.range.end.character as usize;
-        
-            let start_index = &lines[..start_line]
-                .iter()
-                .map(String::len)
-                .fold(0, |acc, current| acc + current + 1) + start_char;
-            let end_index = &lines[..end_line]
-                .iter()
-                .map(String::len)
-                .fold(0, |acc, current| acc + current + 1) + end_char;
+        let mut last_modified_offset = editted_content.len();
+        for i in (0..sorted_edits.len()).rev() {
+            let edit = &sorted_edits[i];
+            let start_offset = to_document_offset(&lines, edit.range.start);
+            let end_offset = to_document_offset(&lines, edit.range.end);
 
-            editted_content = format!(
-                "{}{}{}",
-                &editted_content[..start_index],
-                edit.new_text,
-                &editted_content[end_index..]
-            );
+            if end_offset <= last_modified_offset {
+                editted_content = format!(
+                    "{}{}{}",
+                    &editted_content[..start_offset],
+                    edit.new_text,
+                    &editted_content[end_offset..]
+                );
+            } else {
+                log::debug!("Overlapping edit!");
+            }
+
+            last_modified_offset = start_offset;
         }
 
-        let output_lines = Value::Array(editted_content
-            .lines()
-            .map(|line| line.into())
-            .collect());
-        self.command("1,$d")?; 
-        self.call_function("setline", vec![1.into(), output_lines])?;
+        let new_lines: Vec<Value> = editted_content
+            .split("\n")
+            .map(|e| e.into())
+            .collect();
+
+        let end_line = std::cmp::max(lines.len(), new_lines.len());
+
+        self.call_function("nvim_buf_set_lines", vec![
+            0.into(), // 0 for current buff
+            0.into(),
+            (end_line - 1).into(),
+            false.into(),
+            Value::Array(new_lines),
+        ])?;
         Ok(())
     }
 }
