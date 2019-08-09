@@ -12,7 +12,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use lsp_types::{
     GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
     MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
-    TextDocumentIdentifier, TextEdit
+    TextDocumentIdentifier, TextEdit,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -154,7 +154,8 @@ fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
     lines[..pos.line as usize]
         .iter()
         .map(String::len)
-        .fold(0, |acc, current| acc + current + 1) + pos.character as usize
+        .fold(0, |acc, current| acc + current + 1)
+        + pos.character as usize
 }
 
 fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -308,22 +309,28 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
             ref params,
         } if method == "format_doc" => {
             if params.len() < 1 {
-                Err(EditorError::Parse("Wrong amount of params for format document"))
+                Err(EditorError::Parse(
+                    "Wrong amount of params for format document",
+                ))
             } else {
                 let lang_id = params[0]
                     .as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for format document"))?
+                    .ok_or(EditorError::Parse(
+                        "Invalid lang_id param for format document",
+                    ))?
                     .to_owned();
-                let text_document_str = params[1]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid text_document param for format document"))?;
+                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
+                    "Invalid text_document param for format document",
+                ))?;
                 let text_document = to_text_document(text_document_str).ok_or(
                     EditorError::Parse("Can't parse text_document param for format document"),
                 )?;
 
                 let text_document_lines: Vec<String> = params[2]
                     .as_array()
-                    .ok_or(EditorError::Parse("Invalid text_document_lines param for format document"))?
+                    .ok_or(EditorError::Parse(
+                        "Invalid text_document_lines param for format document",
+                    ))?
                     .into_iter()
                     .map(|line| line.as_str().unwrap().to_owned())
                     .collect();
@@ -331,7 +338,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                 Ok(Event::FormatDoc {
                     lang_id,
                     text_document,
-                    text_document_lines
+                    text_document_lines,
                 })
             }
         }
@@ -568,18 +575,12 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn apply_edits(
-        &self,
-        lines: &Vec<String>,
-        edits: &Vec<TextEdit>
-    ) -> Result<(), EditorError> {
+    fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError> {
         let mut sorted_edits = edits.clone();
         let mut editted_content = lines.join("\n");
-        sorted_edits.sort_by(|a, b| {
-            match a.range.start.line.cmp(&b.range.start.line) {
-                std::cmp::Ordering::Equal => a.range.start.character.cmp(&b.range.start.character),
-                other => other
-            }
+        sorted_edits.sort_by(|a, b| match a.range.start.line.cmp(&b.range.start.line) {
+            std::cmp::Ordering::Equal => a.range.start.character.cmp(&b.range.start.character),
+            other => other,
         });
 
         let mut last_modified_offset = editted_content.len();
@@ -602,20 +603,22 @@ impl Editor for Neovim {
             last_modified_offset = start_offset;
         }
 
-        let new_lines: Vec<Value> = editted_content
-            .split("\n")
-            .map(|e| e.into())
-            .collect();
-
-        let end_line = std::cmp::max(lines.len(), new_lines.len());
-
-        self.call_function("nvim_buf_set_lines", vec![
-            0.into(), // 0 for current buff
-            0.into(),
-            (end_line - 1).into(),
-            false.into(),
-            Value::Array(new_lines),
-        ])?;
+        let new_lines: Vec<Value> = editted_content.split("\n").map(|e| e.into()).collect();
+        let end_line = if new_lines.len() > lines.len() {
+            new_lines.len() - 1
+        } else {
+            lines.len() - 1
+        };
+        self.call_function(
+            "nvim_buf_set_lines",
+            vec![
+                0.into(), // 0 for current buff
+                0.into(),
+                end_line.into(),
+                false.into(),
+                Value::Array(new_lines),
+            ],
+        )?;
         Ok(())
     }
 }
@@ -787,3 +790,4 @@ impl<'de> Deserialize<'de> for NvimMessage {
         deserializer.deserialize_seq(RpcVisitor)
     }
 }
+
