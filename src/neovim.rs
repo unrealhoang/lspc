@@ -587,14 +587,10 @@ impl Editor for Neovim {
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError> {
         let mut sorted_edits = edits.clone();
         let mut editted_content = lines.join("\n");
-        sorted_edits.sort_by(|a, b| match a.range.start.line.cmp(&b.range.start.line) {
-            std::cmp::Ordering::Equal => a.range.start.character.cmp(&b.range.start.character),
-            other => other,
-        });
+        sorted_edits.sort_by_key(|i| (i.range.start.line, i.range.start.character));
 
         let mut last_modified_offset = editted_content.len();
-        for i in (0..sorted_edits.len()).rev() {
-            let edit = &sorted_edits[i];
+        for edit in sorted_edits.iter().rev() {
             let start_offset = to_document_offset(&lines, edit.range.start);
             let end_offset = to_document_offset(&lines, edit.range.end);
 
