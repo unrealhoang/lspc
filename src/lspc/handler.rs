@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    path::Path,
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -34,6 +35,7 @@ pub struct LangServerHandler<E: Editor> {
     rpc_client: rpc::Client<LspMessage>,
     callbacks: Vec<Callback<E>>,
     next_id: AtomicU64,
+    root_path: String,
     // None if server is not started
     server_capabilities: Option<ServerCapabilities>,
     pub lang_settings: LangSettings,
@@ -45,6 +47,7 @@ impl<E: Editor> LangServerHandler<E> {
         command: &String,
         lang_settings: LangSettings,
         args: &[String],
+        root_path: String,
     ) -> Result<Self, LangServerError> {
         let child_process = Command::new(command)
             .args(args)
@@ -63,10 +66,17 @@ impl<E: Editor> LangServerHandler<E> {
             rpc_client,
             lang_id,
             next_id: AtomicU64::new(1),
+            root_path,
             callbacks: Vec::new(),
             server_capabilities: None,
             lang_settings,
         })
+    }
+
+    pub fn include_file(&self, file_path: &str) -> bool {
+        let file_path = Path::new(file_path);
+
+        file_path.starts_with(&self.root_path)
     }
 
     fn send_msg(&self, msg: LspMessage) -> Result<(), LangServerError> {
@@ -145,7 +155,7 @@ impl<E: Editor> LangServerHandler<E> {
         self.send_msg(LspMessage::Request(request))
     }
 
-    fn notify(&mut self, not: RawNotification) -> Result<(), LangServerError> {
+    pub fn notify(&mut self, not: RawNotification) -> Result<(), LangServerError> {
         self.send_msg(LspMessage::Notification(not))
     }
 }

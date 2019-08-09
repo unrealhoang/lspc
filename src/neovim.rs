@@ -169,10 +169,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                 #[derive(Deserialize)]
                 struct StartLangServerParams(String, LsConfig, String);
 
-                let start_lang_params: StartLangServerParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse start lang server params")
-                    })?;
+                let start_lang_params: StartLangServerParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse start lang server params"))?;
 
                 Ok(Event::StartServer {
                     lang_id: start_lang_params.0,
@@ -188,7 +186,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Position,
                 );
 
-                let hover_params: HoverParams = Deserialize::deserialize(Value::from(params))
+                let hover_params: HoverParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
                 Ok(Event::Hover {
@@ -205,10 +203,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Position,
                 );
 
-                let goto_definition_params: GotoDefinitionParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse goto definition params")
-                    })?;
+                let goto_definition_params: GotoDefinitionParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 Ok(Event::GotoDefinition {
                     lang_id: goto_definition_params.0,
@@ -223,9 +219,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     TextDocumentIdentifier,
                 );
 
-                let inlay_hints_params: InlayHintsParams =
-                    Deserialize::deserialize(Value::from(params))
-                        .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
+                let inlay_hints_params: InlayHintsParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
                 Ok(Event::InlayHints {
                     lang_id: inlay_hints_params.0,
@@ -240,15 +235,25 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Vec<String>,
                 );
 
-                let format_doc_params: FormatDocParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse goto definition params")
-                    })?;
+                let format_doc_params: FormatDocParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 Ok(Event::FormatDoc {
                     lang_id: format_doc_params.0,
                     text_document: format_doc_params.1,
                     text_document_lines: format_doc_params.2,
+                })
+            } else if method == "did_open" {
+                #[derive(Deserialize)]
+                struct DidOpenParams(
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                );
+                let did_open_params: DidOpenParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse did_open params"))?;
+
+                Ok(Event::DidOpen {
+                    text_document: did_open_params.0,
                 })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
@@ -343,11 +348,13 @@ impl Neovim {
         let response = self.request("nvim_create_namespace", vec![ns_name.into()])?;
         log::debug!("Create namespace response: {:?}", response);
         if let NvimMessage::RpcResponse { ref result, .. } = response {
-            Ok(result
-                .as_u64()
-                .ok_or(EditorError::UnexpectedResponse(format!("{:?}", response)))?)
+            Ok(result.as_u64().ok_or(EditorError::UnexpectedResponse(
+                "Expected nvim_create_namespace respsonse",
+            ))?)
         } else {
-            Err(EditorError::UnexpectedResponse(format!("{:?}", response)))
+            Err(EditorError::UnexpectedResponse(
+                "Expected nvim_create_namespace respsonse",
+            ))
         }
     }
 
@@ -509,6 +516,44 @@ impl Editor for Neovim {
             ],
         )?;
         Ok(())
+    }
+
+    fn get_document_text(
+        &self,
+        _text_document: &TextDocumentIdentifier,
+    ) -> Result<String, EditorError> {
+        // FIXME: check current buffer is `text_document`
+        let response = self.request(
+            "nvim_buf_get_lines",
+            vec![
+                0.into(), // Current buffer
+                0.into(),
+                Value::from(-1i32),
+                Value::Boolean(true),
+            ],
+        )?;
+
+        let mut first = true;
+        if let NvimMessage::RpcResponse { result, .. } = response {
+            Ok(result
+                .as_array()
+                .ok_or(EditorError::UnexpectedResponse("Expected array"))?
+                .iter()
+                .map(|v| v.as_str())
+                .try_fold(String::new(), |mut acc, item| {
+                    if first {
+                        first = false;
+                    } else {
+                        acc.push_str("\n");
+                    }
+                    acc.push_str(item.ok_or(EditorError::UnexpectedResponse("Expected string"))?);
+                    Ok(acc)
+                })?)
+        } else {
+            Err(EditorError::UnexpectedResponse(
+                "Expected nvim_buf_get_lines response",
+            ))
+        }
     }
 }
 

@@ -11,7 +11,8 @@ use std::{
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
-    notification::ShowMessage,
+    self as lsp,
+    notification::{self as noti, ShowMessage},
     request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
@@ -62,6 +63,9 @@ pub enum Event {
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     },
+    DidOpen {
+        text_document: TextDocumentIdentifier,
+    },
 }
 
 #[derive(Debug)]
@@ -69,7 +73,7 @@ pub enum EditorError {
     Timeout,
     Parse(&'static str),
     CommandDataInvalid(&'static str),
-    UnexpectedResponse(String),
+    UnexpectedResponse(&'static str),
     UnexpectedMessage(String),
     Failed(String),
     RootPathNotFound,
@@ -143,6 +147,10 @@ pub trait Editor: 'static {
     fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn get_document_text(
+        &self,
+        text_document: &TextDocumentIdentifier,
+    ) -> Result<String, EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -199,6 +207,20 @@ fn to_file_url(s: &str) -> Option<Url> {
     Url::from_file_path(s).ok()
 }
 
+// Get the handler of a file by checking
+// if that handler's root is ancestor of `file_path`
+fn handler_of<'a, E>(
+    handlers: &'a mut Vec<LangServerHandler<E>>,
+    file_path: &str,
+) -> Option<&'a mut LangServerHandler<E>>
+where
+    E: Editor,
+{
+    handlers
+        .iter_mut()
+        .find(|handler| handler.include_file(file_path))
+}
+
 impl<E: Editor> Lspc<E> {
     fn handler_for(&mut self, lang_id: &str) -> Option<&mut LangServerHandler<E>> {
         self.lsp_handlers
@@ -228,6 +250,7 @@ impl<E: Editor> Lspc<E> {
                     &config.command[1..],
                 )
                 .map_err(|e| LspcError::LangServer(e))?;
+
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root_markers)
                     .map(|path| path.to_str())
@@ -236,6 +259,14 @@ impl<E: Editor> Lspc<E> {
 
                 let root_url =
                     to_file_url(&root).ok_or(LspcError::Editor(EditorError::RootPathNotFound))?;
+
+                let mut lsp_handler = LangServerHandler::new(
+                    lang_id,
+                    &config.command[0],
+                    &config.command[1..],
+                    root.to_owned(),
+                )
+                .map_err(|e| LspcError::LangServer(e))?;
 
                 let init_params = lsp_types::InitializeParams {
                     process_id: Some(std::process::id() as u64),
@@ -355,6 +386,25 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
+            Event::DidOpen { text_document } => {
+                let file_path = text_document.uri.path();
+                if let Some(handler) = handler_of(&mut self.lsp_handlers, &file_path) {
+                    let text = self.editor.get_document_text(&text_document)?;
+                    let text_doc_item = lsp::TextDocumentItem {
+                        uri: text_document.uri,
+                        language_id: handler.lang_id.clone(),
+                        version: 0,
+                        text,
+                    };
+                    let params = lsp::DidOpenTextDocumentParams {
+                        text_document: text_doc_item,
+                    };
+                    let noti = RawNotification::new::<noti::DidOpenTextDocument>(&params);
+                    handler.notify(noti)?;
+                } else {
+                    log::info!("Unmanaged file: {:?}", text_document.uri);
+                }
+            }
         }
 
         Ok(())
@@ -365,7 +415,7 @@ impl<E: Editor> Lspc<E> {
         match msg {
             LspMessage::Request(_req) => {}
             LspMessage::Notification(mut noti) => {
-                noti = match noti.cast::<ShowMessage>() {
+                noti = match noti.cast::<noti::ShowMessage>() {
                     Ok(params) => {
                         self.editor.show_message(&params)?;
 
