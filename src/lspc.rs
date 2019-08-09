@@ -29,6 +29,7 @@ use self::{
 pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
+    pub indentation: u64
 }
 
 #[derive(Debug)]
@@ -55,6 +56,7 @@ pub enum Event {
     },
     FormatDoc {
         lang_id: String,
+        config: LsConfig,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     }
@@ -319,12 +321,13 @@ impl<E: Editor> Lspc<E> {
             }
             Event::FormatDoc {
                 lang_id,
+                config,
                 text_document_lines,
                 text_document
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let options = FormattingOptions {
-                    tab_size: 4,
+                    tab_size: config.indentation,
                     insert_spaces: true,
                     properties: HashMap::new(),
                 };

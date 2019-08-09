@@ -115,6 +115,7 @@ impl ToDisplay for str {
 pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     let mut root_markers = None;
     let mut command = None;
+    let mut indentation = 4;
     for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
         let k = key.as_str()?;
         Some((k, value))
@@ -138,12 +139,15 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
                 .map(|s| String::from(s))
                 .collect::<Vec<String>>();
             root_markers = Some(data);
+        } else if k == "indentation" {
+            indentation = v.as_u64()?;
         }
     }
     if let (Some(root_markers), Some(command)) = (root_markers, command) {
         Some(LsConfig {
             root_markers,
             command,
+            indentation,
         })
     } else {
         None
@@ -319,14 +323,18 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                         "Invalid lang_id param for format document",
                     ))?
                     .to_owned();
-                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
+                
+                let config =
+                    from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
+
+                let text_document_str = params[2].as_str().ok_or(EditorError::Parse(
                     "Invalid text_document param for format document",
                 ))?;
                 let text_document = to_text_document(text_document_str).ok_or(
                     EditorError::Parse("Can't parse text_document param for format document"),
                 )?;
 
-                let text_document_lines: Vec<String> = params[2]
+                let text_document_lines: Vec<String> = params[3]
                     .as_array()
                     .ok_or(EditorError::Parse(
                         "Invalid text_document_lines param for format document",
@@ -337,6 +345,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
 
                 Ok(Event::FormatDoc {
                     lang_id,
+                    config,
                     text_document,
                     text_document_lines,
                 })
@@ -608,7 +617,7 @@ impl Editor for Neovim {
             new_lines.len() - 1
         } else {
             lines.len() - 1
-        };
+        }; 
         self.call_function(
             "nvim_buf_set_lines",
             vec![
