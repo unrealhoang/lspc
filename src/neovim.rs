@@ -147,7 +147,7 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
         Some(LsConfig {
             root_markers,
             command,
-            indentation,
+            indentation
         })
     } else {
         None
@@ -324,17 +324,14 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     ))?
                     .to_owned();
                 
-                let config =
-                    from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
-
-                let text_document_str = params[2].as_str().ok_or(EditorError::Parse(
+                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
                     "Invalid text_document param for format document",
                 ))?;
                 let text_document = to_text_document(text_document_str).ok_or(
                     EditorError::Parse("Can't parse text_document param for format document"),
                 )?;
 
-                let text_document_lines: Vec<String> = params[3]
+                let text_document_lines: Vec<String> = params[2]
                     .as_array()
                     .ok_or(EditorError::Parse(
                         "Invalid text_document_lines param for format document",
@@ -345,7 +342,6 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
 
                 Ok(Event::FormatDoc {
                     lang_id,
-                    config,
                     text_document,
                     text_document_lines,
                 })

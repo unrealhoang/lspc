@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use self::{
-    handler::LangServerHandler,
+    handler::{LangServerHandler, LangSettings},
     msg::{LspMessage, RawNotification, RawRequest, RawResponse},
     types::{InlayHint, InlayHints, InlayHintsParams},
 };
@@ -29,7 +29,7 @@ use self::{
 pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
-    pub indentation: u64
+    pub indentation: u64,
 }
 
 #[derive(Debug)]
@@ -56,7 +56,6 @@ pub enum Event {
     },
     FormatDoc {
         lang_id: String,
-        config: LsConfig,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     }
@@ -215,8 +214,11 @@ impl<E: Editor> Lspc<E> {
                 cur_path,
             } => {
                 let capabilities = self.editor.capabilities();
+                let lang_settings = LangSettings {
+                    indentation: config.indentation
+                };
                 let mut lsp_handler =
-                    LangServerHandler::new(lang_id, &config.command[0], &config.command[1..])
+                    LangServerHandler::new(lang_id, &config.command[0], lang_settings, &config.command[1..])
                         .map_err(|e| LspcError::LangServer(e))?;
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root_markers)
@@ -321,13 +323,12 @@ impl<E: Editor> Lspc<E> {
             }
             Event::FormatDoc {
                 lang_id,
-                config,
                 text_document_lines,
                 text_document
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let options = FormattingOptions {
-                    tab_size: config.indentation,
+                    tab_size: handler.lang_settings.indentation,
                     insert_spaces: true,
                     properties: HashMap::new(),
                 };
