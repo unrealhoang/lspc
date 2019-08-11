@@ -154,6 +154,31 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     }
 }
 
+fn apply_edits(lines: &Vec<String>, edits: &Vec<TextEdit>) -> String {
+    let mut sorted_edits = edits.clone();
+    let mut editted_content = lines.join("\n");
+    sorted_edits.sort_by_key(|i| (i.range.start.line, i.range.start.character));
+    let mut last_modified_offset = editted_content.len();
+    for edit in sorted_edits.iter().rev() {
+        let start_offset = to_document_offset(&lines, edit.range.start);
+        let end_offset = to_document_offset(&lines, edit.range.end);
+
+        if end_offset <= last_modified_offset {
+            editted_content = format!(
+                "{}{}{}",
+                &editted_content[..start_offset],
+                edit.new_text,
+                &editted_content[end_offset..]
+            );
+        } else {
+            log::debug!("Overlapping edit!");
+        }
+
+        last_modified_offset = start_offset;
+    }
+    editted_content
+}
+
 fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
     lines[..pos.line as usize]
         .iter()
@@ -581,29 +606,7 @@ impl Editor for Neovim {
     }
 
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError> {
-        let mut sorted_edits = edits.clone();
-        let mut editted_content = lines.join("\n");
-        sorted_edits.sort_by_key(|i| (i.range.start.line, i.range.start.character));
-
-        let mut last_modified_offset = editted_content.len();
-        for edit in sorted_edits.iter().rev() {
-            let start_offset = to_document_offset(&lines, edit.range.start);
-            let end_offset = to_document_offset(&lines, edit.range.end);
-
-            if end_offset <= last_modified_offset {
-                editted_content = format!(
-                    "{}{}{}",
-                    &editted_content[..start_offset],
-                    edit.new_text,
-                    &editted_content[end_offset..]
-                );
-            } else {
-                log::debug!("Overlapping edit!");
-            }
-
-            last_modified_offset = start_offset;
-        }
-
+        let editted_content = apply_edits(lines, edits);
         let new_lines: Vec<Value> = editted_content.split("\n").map(|e| e.into()).collect();
         let end_line = if new_lines.len() > lines.len() {
             new_lines.len() - 1
@@ -792,3 +795,35 @@ impl<'de> Deserialize<'de> for NvimMessage {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::{TextEdit, Range, Position};
+
+    #[test]
+    fn test_apply_edits() {
+        let original_content = String::from("fn      a   (   b:          String, c: Vec<     String>) ->          ()
+
+{
+
+    print!      (           \"hello\"
+                            )
+}");
+        let lines = original_content.split("\n").map(String::from).collect::<Vec<String>>();
+        let edits = vec![
+            TextEdit::new(
+                Range::new(
+                    Position::new(0, 0),
+                    Position::new(6, 0)
+                ),
+                String::from("fn a(b: String, c: Vec<String>) -> () {\n  print!(\"hello\")\n")
+            ),
+        ];
+        let editted_content = apply_edits(&lines, &edits);
+        let expected_content = String::from("fn a(b: String, c: Vec<String>) -> () {
+  print!(\"hello\")
+}");
+        assert_eq!(editted_content, expected_content);
+    }
+}
