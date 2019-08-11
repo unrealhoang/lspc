@@ -30,6 +30,7 @@ pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
     pub indentation: u64,
+    pub indentation_with_space: bool
 }
 
 #[derive(Debug)]
@@ -215,7 +216,8 @@ impl<E: Editor> Lspc<E> {
             } => {
                 let capabilities = self.editor.capabilities();
                 let lang_settings = LangSettings {
-                    indentation: config.indentation
+                    indentation: config.indentation,
+                    indentation_with_space: config.indentation_with_space
                 };
                 let mut lsp_handler =
                     LangServerHandler::new(lang_id, &config.command[0], lang_settings, &config.command[1..])
@@ -329,7 +331,7 @@ impl<E: Editor> Lspc<E> {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let options = FormattingOptions {
                     tab_size: handler.lang_settings.indentation,
-                    insert_spaces: true,
+                    insert_spaces: handler.lang_settings.indentation_with_space,
                     properties: HashMap::new(),
                 };
                 let params = DocumentFormattingParams { text_document, options };

@@ -116,6 +116,7 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     let mut root_markers = None;
     let mut command = None;
     let mut indentation = 4;
+	let mut indentation_with_space = true;
     for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
         let k = key.as_str()?;
         Some((k, value))
@@ -141,13 +142,16 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
             root_markers = Some(data);
         } else if k == "indentation" {
             indentation = v.as_u64()?;
-        }
+        } else if k == "indentation_with_space" {
+			indentation_with_space = v.as_bool()?;
+		}
     }
     if let (Some(root_markers), Some(command)) = (root_markers, command) {
         Some(LsConfig {
             root_markers,
             command,
-            indentation
+            indentation,
+			indentation_with_space
         })
     } else {
         None
