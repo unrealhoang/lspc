@@ -803,27 +803,26 @@ mod tests {
 
     #[test]
     fn test_apply_edits() {
-        let original_content = String::from("fn      a   (   b:          String, c: Vec<     String>) ->          ()
-
-{
-
-    print!      (           \"hello\"
-                            )
-}");
+        let original_content = String::from("fn   a() {\n  print!(\"hello\");\n}");
         let lines = original_content.split("\n").map(String::from).collect::<Vec<String>>();
         let edits = vec![
             TextEdit::new(
                 Range::new(
-                    Position::new(0, 0),
-                    Position::new(6, 0)
+                    Position::new(0, 3),
+                    Position::new(0, 5)
                 ),
-                String::from("fn a(b: String, c: Vec<String>) -> () {\n  print!(\"hello\")\n")
+                String::from("")
             ),
-        ];
+			TextEdit::new(
+				Range::new(
+					Position::new(1, 0),
+					Position::new(1, 0)
+				),
+				String::from("  ")
+			)
+		];
         let editted_content = apply_edits(&lines, &edits);
-        let expected_content = String::from("fn a(b: String, c: Vec<String>) -> () {
-  print!(\"hello\")
-}");
+        let expected_content = String::from("fn a() {\n    print!(\"hello\");\n}");
         assert_eq!(editted_content, expected_content);
     }
 }
