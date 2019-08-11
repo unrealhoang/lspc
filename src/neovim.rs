@@ -813,14 +813,14 @@ mod tests {
                 ),
                 String::from("")
             ),
-			TextEdit::new(
-				Range::new(
-					Position::new(1, 0),
-					Position::new(1, 0)
-				),
-				String::from("  ")
-			)
-		];
+            TextEdit::new(
+                Range::new(
+                    Position::new(1, 0),
+                    Position::new(1, 0)
+                ),
+                String::from("  ")
+            )
+        ];
         let editted_content = apply_edits(&lines, &edits);
         let expected_content = String::from("fn a() {\n    print!(\"hello\");\n}");
         assert_eq!(editted_content, expected_content);
