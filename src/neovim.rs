@@ -116,7 +116,7 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     let mut root_markers = None;
     let mut command = None;
     let mut indentation = 4;
-	let mut indentation_with_space = true;
+    let mut indentation_with_space = true;
     for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
         let k = key.as_str()?;
         Some((k, value))
@@ -143,15 +143,15 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
         } else if k == "indentation" {
             indentation = v.as_u64()?;
         } else if k == "indentation_with_space" {
-			indentation_with_space = v.as_bool()?;
-		}
+            indentation_with_space = v.as_bool()?;
+        }
     }
     if let (Some(root_markers), Some(command)) = (root_markers, command) {
         Some(LsConfig {
             root_markers,
             command,
             indentation,
-			indentation_with_space
+            indentation_with_space,
         })
     } else {
         None
@@ -352,7 +352,6 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                         "Invalid lang_id param for format document",
                     ))?
                     .to_owned();
-                
                 let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
                     "Invalid text_document param for format document",
                 ))?;
@@ -616,7 +615,7 @@ impl Editor for Neovim {
             new_lines.len() - 1
         } else {
             lines.len() - 1
-        }; 
+        };
         self.call_function(
             "nvim_buf_set_lines",
             vec![
@@ -799,34 +798,31 @@ impl<'de> Deserialize<'de> for NvimMessage {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{TextEdit, Range, Position};
+    use lsp_types::{Position, Range, TextEdit};
 
     #[test]
     fn test_apply_edits() {
         let original_content = String::from("fn   a() {\n  print!(\"hello\");\n}");
-        let lines = original_content.split("\n").map(String::from).collect::<Vec<String>>();
+        let lines = original_content
+            .split("\n")
+            .map(String::from)
+            .collect::<Vec<String>>();
         let edits = vec![
             TextEdit::new(
-                Range::new(
-                    Position::new(0, 3),
-                    Position::new(0, 5)
-                ),
-                String::from("")
+                Range::new(Position::new(0, 3), Position::new(0, 5)),
+                String::from(""),
             ),
             TextEdit::new(
-                Range::new(
-                    Position::new(1, 0),
-                    Position::new(1, 0)
-                ),
-                String::from("  ")
-            )
+                Range::new(Position::new(1, 0), Position::new(1, 0)),
+                String::from("  "),
+            ),
         ];
         let editted_content = apply_edits(&lines, &edits);
         let expected_content = String::from("fn a() {\n    print!(\"hello\");\n}");
         assert_eq!(editted_content, expected_content);
     }
 }
+
