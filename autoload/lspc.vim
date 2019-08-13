@@ -18,12 +18,12 @@ function! lspc#output(log)
 endfunction
 
 function! s:echo_handler(job_id, data, name)
-  let l:log = ["[LSPC][" . a:name ."]. Data: " . string(a:data)]
+  let l:log = "[LSPC][" . a:name ."]. Data: " . string(a:data)
   call lspc#output(l:log)
 endfunction
 
 function! lspc#init()
-  let l:binpath = s:root . '/target/debug/neovim_lspc'
+  let l:binpath = s:root . '/target/release/neovim_lspc'
 
   let s:job_id = jobstart([l:binpath], {
         \ 'rpc': v:true,
@@ -33,6 +33,10 @@ function! lspc#init()
   if s:job_id == -1
     echo "[LSPC] Cannot execute " . l:binpath
   endif
+endfunction
+
+function! lspc#started() abort
+  return exists('s:job_id')
 endfunction
 
 function! lspc#destroy()

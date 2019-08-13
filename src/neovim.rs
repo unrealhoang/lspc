@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
     io::{BufRead, Write},
@@ -37,6 +38,8 @@ pub struct Neovim {
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
+    // Map from bufnr to LangId
+    buf_mapper: HashMap<u64, String>,
 }
 
 pub trait ToDisplay {
@@ -302,15 +305,54 @@ impl Neovim {
             event_receiver,
             rpc_client,
             thread,
+            buf_mapper: HashMap::new(),
         }
     }
 
-    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, EditorError> {
+    // using nvim_call_atomic rpc call
+    fn call_atomic(&self, calls: &[Value]) -> Result<Vec<Value>, EditorError> {
+        let response = self.request("nvim_call_atomic", calls.into());
+        if let NvimMessage::RpcResponse { result, .. } = response? {
+            let mut tuple = if let Value::Array(arr) = result {
+                arr
+            } else {
+                return Err(EditorError::UnexpectedResponse("Expected tuple"));
+            };
+            let error = tuple
+                .pop()
+                .ok_or(EditorError::UnexpectedResponse("Expect error value"))?;
+
+            if let Some(error) = error.as_array() {
+                let error_msg = error
+                    .get(2)
+                    .ok_or(EditorError::UnexpectedResponse("Expected error message"))?
+                    .as_str()
+                    .ok_or(EditorError::UnexpectedResponse(
+                        "Expected String error message",
+                    ))?;
+
+                return Err(EditorError::Failed(error_msg.into()));
+            }
+
+            let results = tuple
+                .pop()
+                .ok_or(EditorError::UnexpectedResponse("Expect result array"))?;
+            if let Value::Array(results) = results {
+                Ok(results)
+            } else {
+                Err(EditorError::UnexpectedResponse("Expect result array"))
+            }
+        } else {
+            Err(EditorError::UnexpectedResponse("Expected response"))
+        }
+    }
+
+    pub fn request(&self, method: &str, params: &[Value]) -> Result<NvimMessage, EditorError> {
         let msgid = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = NvimMessage::RpcRequest {
             msgid,
             method: method.into(),
-            params: Value::from(params),
+            params: Value::from(params.to_owned()),
         };
 
         let (response_sender, response_receiver) = channel::bounded::<NvimMessage>(1);
@@ -324,10 +366,10 @@ impl Neovim {
             .map_err(|_| EditorError::Timeout)
     }
 
-    pub fn notify(&self, method: &str, params: Vec<Value>) -> Result<(), EditorError> {
+    pub fn notify(&self, method: &str, params: &[Value]) -> Result<(), EditorError> {
         let noti = NvimMessage::RpcNotification {
             method: method.into(),
-            params: Value::from(params),
+            params: Value::from(params.to_owned()),
         };
         // FIXME: add RpcQueueFull to EditorError??
         self.rpc_client.sender.send(noti).unwrap();
@@ -336,16 +378,16 @@ impl Neovim {
     }
 
     pub fn command(&self, command: &str) -> Result<NvimMessage, EditorError> {
-        self.request("nvim_command", vec![command.into()])
+        self.request("nvim_command", &vec![command.into()])
     }
 
     // Call VimL function
     pub fn call_function(&self, func: &str, args: Vec<Value>) -> Result<NvimMessage, EditorError> {
-        self.request("nvim_call_function", vec![func.into(), args.into()])
+        self.request("nvim_call_function", &vec![func.into(), args.into()])
     }
 
     pub fn create_namespace(&self, ns_name: &str) -> Result<u64, EditorError> {
-        let response = self.request("nvim_create_namespace", vec![ns_name.into()])?;
+        let response = self.request("nvim_create_namespace", &vec![ns_name.into()])?;
         log::debug!("Create namespace response: {:?}", response);
         if let NvimMessage::RpcResponse { ref result, .. } = response {
             Ok(result.as_u64().ok_or(EditorError::UnexpectedResponse(
@@ -372,7 +414,7 @@ impl Neovim {
             .into();
         self.notify(
             "nvim_buf_set_virtual_text",
-            vec![
+            &vec![
                 buffer_id.into(),
                 ns_id.into(),
                 line.into(),
@@ -419,19 +461,19 @@ impl Editor for Neovim {
 
     fn say_hello(&self) -> Result<(), EditorError> {
         let params = vec!["echo 'hello from the other side'".into()];
-        self.request("nvim_command", params)
+        self.request("nvim_command", &params)
             .map_err(|_| EditorError::Timeout)?;
 
         Ok(())
     }
 
-    fn message(&self, msg: &str) -> Result<(), EditorError> {
+    fn message(&mut self, msg: &str) -> Result<(), EditorError> {
         self.command(&format!("echo '{}'", msg))?;
         Ok(())
     }
 
     fn show_hover(
-        &self,
+        &mut self,
         _text_document: &TextDocumentIdentifier,
         hover: &Hover,
     ) -> Result<(), EditorError> {
@@ -457,7 +499,7 @@ impl Editor for Neovim {
     }
 
     fn inline_hints(
-        &self,
+        &mut self,
         text_document: &TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError> {
@@ -475,13 +517,13 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn show_message(&self, params: &ShowMessageParams) -> Result<(), EditorError> {
+    fn show_message(&mut self, params: &ShowMessageParams) -> Result<(), EditorError> {
         self.command(&format!("echo '[LS-{:?}] {}'", params.typ, params.message))?;
 
         Ok(())
     }
 
-    fn goto(&self, location: &Location) -> Result<(), EditorError> {
+    fn goto(&mut self, location: &Location) -> Result<(), EditorError> {
         let filepath = location
             .uri
             .to_file_path()
@@ -518,41 +560,36 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn get_document_text(
-        &self,
+    fn watch_file_events(
+        &mut self,
         _text_document: &TextDocumentIdentifier,
-    ) -> Result<String, EditorError> {
+        lang_id: &str,
+    ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
-        let response = self.request(
-            "nvim_buf_get_lines",
+        let mut results = self.call_atomic(&[
             vec![
-                0.into(), // Current buffer
-                0.into(),
-                Value::from(-1i32),
-                Value::Boolean(true),
-            ],
-        )?;
+                "nvim_buf_attach".into(),
+                Value::Array(vec![
+                    0.into(), // Current buffer
+                    Value::Boolean(true),
+                    Value::Map(Vec::new()),
+                ]),
+            ]
+            .into(),
+            vec!["nvim_get_current_buf".into(), Value::Array(Vec::new())].into(),
+        ])?;
 
-        let mut first = true;
-        if let NvimMessage::RpcResponse { result, .. } = response {
-            Ok(result
-                .as_array()
-                .ok_or(EditorError::UnexpectedResponse("Expected array"))?
-                .iter()
-                .map(|v| v.as_str())
-                .try_fold(String::new(), |mut acc, item| {
-                    if first {
-                        first = false;
-                    } else {
-                        acc.push_str("\n");
-                    }
-                    acc.push_str(item.ok_or(EditorError::UnexpectedResponse("Expected string"))?);
-                    Ok(acc)
-                })?)
+        if results.len() != 2 {
+            Err(EditorError::UnexpectedResponse("Wrong number of response"))
         } else {
-            Err(EditorError::UnexpectedResponse(
-                "Expected nvim_buf_get_lines response",
-            ))
+            let cur_bufnr = results
+                .pop()
+                .unwrap()
+                .as_u64()
+                .ok_or(EditorError::UnexpectedResponse("Expect integer bufnr"))?;
+
+            self.buf_mapper.insert(cur_bufnr, lang_id.to_owned());
+            Ok(())
         }
     }
 }

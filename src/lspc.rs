@@ -11,8 +11,7 @@ use std::{
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
-    self as lsp,
-    notification::{self as noti, ShowMessage},
+    notification::{self as noti},
     request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
@@ -133,24 +132,25 @@ pub trait Editor: 'static {
     fn events(&self) -> Receiver<Event>;
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
-    fn message(&self, msg: &str) -> Result<(), EditorError>;
+    fn message(&mut self, msg: &str) -> Result<(), EditorError>;
     fn show_hover(
-        &self,
+        &mut self,
         text_document: &TextDocumentIdentifier,
         hover: &Hover,
     ) -> Result<(), EditorError>;
     fn inline_hints(
-        &self,
+        &mut self,
         text_document: &TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError>;
-    fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
-    fn goto(&self, location: &Location) -> Result<(), EditorError>;
+    fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
+    fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
-    fn get_document_text(
-        &self,
+    fn watch_file_events(
+        &mut self,
         text_document: &TextDocumentIdentifier,
-    ) -> Result<String, EditorError>;
+        lang_id: &str,
+    ) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -243,13 +243,6 @@ impl<E: Editor> Lspc<E> {
                     indentation: config.indentation,
                     indentation_with_space: config.indentation_with_space,
                 };
-                let mut lsp_handler = LangServerHandler::new(
-                    lang_id,
-                    &config.command[0],
-                    lang_settings,
-                    &config.command[1..],
-                )
-                .map_err(|e| LspcError::LangServer(e))?;
 
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root_markers)
@@ -263,6 +256,7 @@ impl<E: Editor> Lspc<E> {
                 let mut lsp_handler = LangServerHandler::new(
                     lang_id,
                     &config.command[0],
+                    lang_settings,
                     &config.command[1..],
                     root.to_owned(),
                 )
@@ -389,18 +383,8 @@ impl<E: Editor> Lspc<E> {
             Event::DidOpen { text_document } => {
                 let file_path = text_document.uri.path();
                 if let Some(handler) = handler_of(&mut self.lsp_handlers, &file_path) {
-                    let text = self.editor.get_document_text(&text_document)?;
-                    let text_doc_item = lsp::TextDocumentItem {
-                        uri: text_document.uri,
-                        language_id: handler.lang_id.clone(),
-                        version: 0,
-                        text,
-                    };
-                    let params = lsp::DidOpenTextDocumentParams {
-                        text_document: text_doc_item,
-                    };
-                    let noti = RawNotification::new::<noti::DidOpenTextDocument>(&params);
-                    handler.notify(noti)?;
+                    self.editor
+                        .watch_file_events(&text_document, &handler.lang_id)?;
                 } else {
                     log::info!("Unmanaged file: {:?}", text_document.uri);
                 }
