@@ -6,19 +6,21 @@ pub mod types;
 use std::{
     io,
     path::{Path, PathBuf},
+    collections::HashMap
 };
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
-    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier,
+    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize, Formatting},
+    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier, DocumentFormattingParams,
+    FormattingOptions, TextEdit
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use self::{
-    handler::LangServerHandler,
+    handler::{LangServerHandler, LangSettings},
     msg::{LspMessage, RawNotification, RawRequest, RawResponse},
     types::{InlayHint, InlayHints, InlayHintsParams},
 };
@@ -27,6 +29,8 @@ use self::{
 pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
+    pub indentation: u64,
+    pub indentation_with_space: bool
 }
 
 #[derive(Debug)]
@@ -51,6 +55,11 @@ pub enum Event {
         lang_id: String,
         text_document: TextDocumentIdentifier,
     },
+    FormatDoc {
+        lang_id: String,
+        text_document_lines: Vec<String>,
+        text_document: TextDocumentIdentifier,
+    }
 }
 
 #[derive(Debug)]
@@ -131,6 +140,7 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
     fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&self, location: &Location) -> Result<(), EditorError>;
+    fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -205,8 +215,12 @@ impl<E: Editor> Lspc<E> {
                 cur_path,
             } => {
                 let capabilities = self.editor.capabilities();
+                let lang_settings = LangSettings {
+                    indentation: config.indentation,
+                    indentation_with_space: config.indentation_with_space
+                };
                 let mut lsp_handler =
-                    LangServerHandler::new(lang_id, &config.command[0], &config.command[1..])
+                    LangServerHandler::new(lang_id, &config.command[0], lang_settings, &config.command[1..])
                         .map_err(|e| LspcError::LangServer(e))?;
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root_markers)
@@ -307,6 +321,29 @@ impl<E: Editor> Lspc<E> {
 
                         Ok(())
                     }),
+                )?;
+            }
+            Event::FormatDoc {
+                lang_id,
+                text_document_lines,
+                text_document
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let options = FormattingOptions {
+                    tab_size: handler.lang_settings.indentation,
+                    insert_spaces: handler.lang_settings.indentation_with_space,
+                    properties: HashMap::new(),
+                };
+                let params = DocumentFormattingParams { text_document, options };
+                handler.lsp_request::<Formatting>(
+                    params,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(edits) = response {
+                            editor.apply_edits(&text_document_lines, &edits)?;
+                        }
+
+                        Ok(())
+                    })
                 )?;
             }
         }

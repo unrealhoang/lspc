@@ -12,7 +12,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use lsp_types::{
     GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
     MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
-    TextDocumentIdentifier,
+    TextDocumentIdentifier, TextEdit,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -115,6 +115,8 @@ impl ToDisplay for str {
 pub fn from_value(config_value: &Value) -> Option<LsConfig> {
     let mut root_markers = None;
     let mut command = None;
+    let mut indentation = 4;
+    let mut indentation_with_space = true;
     for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
         let k = key.as_str()?;
         Some((k, value))
@@ -138,16 +140,55 @@ pub fn from_value(config_value: &Value) -> Option<LsConfig> {
                 .map(|s| String::from(s))
                 .collect::<Vec<String>>();
             root_markers = Some(data);
+        } else if k == "indentation" {
+            indentation = v.as_u64()?;
+        } else if k == "indentation_with_space" {
+            indentation_with_space = v.as_bool()?;
         }
     }
     if let (Some(root_markers), Some(command)) = (root_markers, command) {
         Some(LsConfig {
             root_markers,
             command,
+            indentation,
+            indentation_with_space,
         })
     } else {
         None
     }
+}
+
+fn apply_edits(lines: &Vec<String>, edits: &Vec<TextEdit>) -> String {
+    let mut sorted_edits = edits.clone();
+    let mut editted_content = lines.join("\n");
+    sorted_edits.sort_by_key(|i| (i.range.start.line, i.range.start.character));
+    let mut last_modified_offset = editted_content.len();
+    for edit in sorted_edits.iter().rev() {
+        let start_offset = to_document_offset(&lines, edit.range.start);
+        let end_offset = to_document_offset(&lines, edit.range.end);
+
+        if end_offset <= last_modified_offset {
+            editted_content = format!(
+                "{}{}{}",
+                &editted_content[..start_offset],
+                edit.new_text,
+                &editted_content[end_offset..]
+            );
+        } else {
+            log::debug!("Overlapping edit!");
+        }
+
+        last_modified_offset = start_offset;
+    }
+    editted_content
+}
+
+fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
+    lines[..pos.line as usize]
+        .iter()
+        .map(String::len)
+        .fold(0, |acc, current| acc + current + 1)
+        + pos.character as usize
 }
 
 fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -293,6 +334,44 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                 Ok(Event::InlayHints {
                     lang_id,
                     text_document,
+                })
+            }
+        }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "format_doc" => {
+            if params.len() < 1 {
+                Err(EditorError::Parse(
+                    "Wrong amount of params for format document",
+                ))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse(
+                        "Invalid lang_id param for format document",
+                    ))?
+                    .to_owned();
+                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
+                    "Invalid text_document param for format document",
+                ))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for format document"),
+                )?;
+
+                let text_document_lines: Vec<String> = params[2]
+                    .as_array()
+                    .ok_or(EditorError::Parse(
+                        "Invalid text_document_lines param for format document",
+                    ))?
+                    .into_iter()
+                    .map(|line| line.as_str().unwrap().to_owned())
+                    .collect();
+
+                Ok(Event::FormatDoc {
+                    lang_id,
+                    text_document,
+                    text_document_lines,
                 })
             }
         }
@@ -528,6 +607,27 @@ impl Editor for Neovim {
 
         Ok(())
     }
+
+    fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError> {
+        let editted_content = apply_edits(lines, edits);
+        let new_lines: Vec<Value> = editted_content.split("\n").map(|e| e.into()).collect();
+        let end_line = if new_lines.len() > lines.len() {
+            new_lines.len() - 1
+        } else {
+            lines.len() - 1
+        };
+        self.call_function(
+            "nvim_buf_set_lines",
+            vec![
+                0.into(), // 0 for current buff
+                0.into(),
+                end_line.into(),
+                false.into(),
+                Value::Array(new_lines),
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 impl Message for NvimMessage {
@@ -697,3 +797,32 @@ impl<'de> Deserialize<'de> for NvimMessage {
         deserializer.deserialize_seq(RpcVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::{Position, Range, TextEdit};
+
+    #[test]
+    fn test_apply_edits() {
+        let original_content = String::from("fn   a() {\n  print!(\"hello\");\n}");
+        let lines = original_content
+            .split("\n")
+            .map(String::from)
+            .collect::<Vec<String>>();
+        let edits = vec![
+            TextEdit::new(
+                Range::new(Position::new(0, 3), Position::new(0, 5)),
+                String::from(""),
+            ),
+            TextEdit::new(
+                Range::new(Position::new(1, 0), Position::new(1, 0)),
+                String::from("  "),
+            ),
+        ];
+        let editted_content = apply_edits(&lines, &edits);
+        let expected_content = String::from("fn a() {\n    print!(\"hello\");\n}");
+        assert_eq!(editted_content, expected_content);
+    }
+}
+

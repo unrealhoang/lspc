@@ -24,6 +24,11 @@ pub struct Callback<E: Editor> {
     pub func: RawCallback<E>,
 }
 
+pub struct LangSettings {
+    pub indentation: u64,
+    pub indentation_with_space: bool
+}
+
 pub struct LangServerHandler<E: Editor> {
     pub lang_id: String,
     rpc_client: rpc::Client<LspMessage>,
@@ -31,12 +36,14 @@ pub struct LangServerHandler<E: Editor> {
     next_id: AtomicU64,
     // None if server is not started
     server_capabilities: Option<ServerCapabilities>,
+    pub lang_settings: LangSettings,
 }
 
 impl<E: Editor> LangServerHandler<E> {
     pub fn new(
         lang_id: String,
         command: &String,
+        lang_settings: LangSettings,
         args: &[String],
     ) -> Result<Self, LangServerError> {
         let child_process = Command::new(command)
@@ -58,6 +65,7 @@ impl<E: Editor> LangServerHandler<E> {
             next_id: AtomicU64::new(1),
             callbacks: Vec::new(),
             server_capabilities: None,
+            lang_settings,
         })
     }
 
