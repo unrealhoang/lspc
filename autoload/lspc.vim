@@ -23,15 +23,16 @@ function! s:echo_handler(job_id, data, name)
 endfunction
 
 function! lspc#init()
-  let l:binpath = s:root . '/target/release/neovim_lspc'
+  let l:binpath = s:root . '/target/debug/neovim_lspc'
 
+  call setenv('RUST_BACKTRACE', '1')
   let s:job_id = jobstart([l:binpath], {
         \ 'rpc': v:true,
         \ 'on_stderr': function('s:echo_handler'),
         \ 'on_exit':   function('s:echo_handler'),
         \ })
   if s:job_id == -1
-    echo "[LSPC] Cannot execute " . l:binpath
+    echom "[LSPC] Cannot execute " . l:binpath
   endif
 endfunction
 

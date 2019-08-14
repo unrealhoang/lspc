@@ -280,6 +280,7 @@ impl Neovim {
             let mut subscriptions = Vec::<(u64, Sender<NvimMessage>)>::new();
 
             for nvim_msg in rpc_receiver {
+                log::debug!("< Neovim: {:?}", nvim_msg);
                 if let NvimMessage::RpcResponse { msgid, .. } = nvim_msg {
                     while let Ok(sub) = subscription_receiver.try_recv() {
                         subscriptions.push(sub);
@@ -311,20 +312,12 @@ impl Neovim {
 
     // using nvim_call_atomic rpc call
     fn call_atomic(&self, calls: &[Value]) -> Result<Vec<Value>, EditorError> {
-        let response = self.request("nvim_call_atomic", calls.into());
-        if let NvimMessage::RpcResponse { result, .. } = response? {
-            let mut tuple = if let Value::Array(arr) = result {
-                arr
-            } else {
-                return Err(EditorError::UnexpectedResponse("Expected tuple"));
-            };
-            let error = tuple
-                .pop()
-                .ok_or(EditorError::UnexpectedResponse("Expect error value"))?;
-
+        let response = self.request("nvim_call_atomic", &[calls.to_vec().into()]);
+        log::debug!("Response: {:?}", response);
+        if let NvimMessage::RpcResponse { result, error, .. } = response? {
             if let Some(error) = error.as_array() {
                 let error_msg = error
-                    .get(2)
+                    .get(1)
                     .ok_or(EditorError::UnexpectedResponse("Expected error message"))?
                     .as_str()
                     .ok_or(EditorError::UnexpectedResponse(
@@ -334,10 +327,7 @@ impl Neovim {
                 return Err(EditorError::Failed(error_msg.into()));
             }
 
-            let results = tuple
-                .pop()
-                .ok_or(EditorError::UnexpectedResponse("Expect result array"))?;
-            if let Value::Array(results) = results {
+            if let Value::Array(results) = result {
                 Ok(results)
             } else {
                 Err(EditorError::UnexpectedResponse("Expect result array"))

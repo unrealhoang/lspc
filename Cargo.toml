@@ -5,7 +5,7 @@ authors = ["Unreal Hoang <unrealhoang@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-serde = { version = "1.0.83", features = ["derive"] }
+serde = { version = "*", features = ["derive"] }
 crossbeam = "*"
 rmpv = { git = "https://github.com/unrealhoang/msgpack-rust", branch = "support-serde-ext", version = "*", features = ["with-serde"] }
 url_serde = "*"
