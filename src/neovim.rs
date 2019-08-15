@@ -14,8 +14,12 @@ use lsp_types::{
     MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
     TextDocumentIdentifier, TextEdit,
 };
-use rmp_serde::Deserializer;
-use rmpv::Value;
+use rmpv::{
+    Value,
+    decode::read_value,
+    encode::write_value,
+    ext::{from_value, to_value},
+};
 use serde::{
     self,
     de::{self, SeqAccess, Visitor},
@@ -111,50 +115,51 @@ impl ToDisplay for str {
     }
 }
 
-// Todo: cut down these parsing logic by implement Deserializer for Value
-pub fn from_value(config_value: &Value) -> Option<LsConfig> {
-    let mut root_markers = None;
-    let mut command = None;
-    let mut indentation = 4;
-    let mut indentation_with_space = true;
-    for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
-        let k = key.as_str()?;
-        Some((k, value))
-    }) {
-        if k == "command" {
-            let data = v
-                .as_array()?
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(|s| String::from(s))
-                .collect::<Vec<String>>();
+impl LsConfig {
+    pub fn from_value(config_value: &Value) -> Option<LsConfig> {
+        let mut root_markers = None;
+        let mut command = None;
+        let mut indentation = None;
+        let mut indentation_with_space = None;
+        for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
+            let k = key.as_str()?;
+            Some((k, value))
+        }) {
+            if k == "command" {
+                let data = v
+                    .as_array()?
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|s| String::from(s))
+                    .collect::<Vec<String>>();
 
-            if data.len() > 1 {
-                command = Some(data);
+                if data.len() > 1 {
+                    command = Some(data);
+                }
+            } else if k == "root_markers" {
+                let data = v
+                    .as_array()?
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|s| String::from(s))
+                    .collect::<Vec<String>>();
+                root_markers = Some(data);
+            } else if k == "indentation" {
+                indentation = Some(v.as_u64()?);
+            } else if k == "indentation_with_space" {
+                indentation_with_space = Some(v.as_bool()?);
             }
-        } else if k == "root_markers" {
-            let data = v
-                .as_array()?
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(|s| String::from(s))
-                .collect::<Vec<String>>();
-            root_markers = Some(data);
-        } else if k == "indentation" {
-            indentation = v.as_u64()?;
-        } else if k == "indentation_with_space" {
-            indentation_with_space = v.as_bool()?;
         }
-    }
-    if let (Some(root_markers), Some(command)) = (root_markers, command) {
-        Some(LsConfig {
-            root_markers,
-            command,
-            indentation,
-            indentation_with_space,
-        })
-    } else {
-        None
+        if let (Some(root_markers), Some(command), Some(indentation), Some(indentation_with_space)) = (root_markers, command, indentation, indentation_with_space) {
+            Some(LsConfig {
+                root_markers,
+                command,
+                indentation,
+                indentation_with_space,
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -239,7 +244,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     ))?
                     .to_owned();
                 let config =
-                    from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
+                    LsConfig::from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
                 let cur_path = params[2]
                     .as_str()
                     .ok_or(EditorError::Parse(
@@ -632,23 +637,24 @@ impl Editor for Neovim {
 
 impl Message for NvimMessage {
     fn read(r: &mut impl BufRead) -> Result<Option<NvimMessage>, RpcError> {
-        let mut deserializer = Deserializer::new(r);
-        Ok(Some(Deserialize::deserialize(&mut deserializer).map_err(
-            |e| match e {
-                rmp_serde::decode::Error::InvalidMarkerRead(_)
-                | rmp_serde::decode::Error::InvalidDataRead(_) => {
-                    RpcError::Read(e.description().into())
-                }
-                _ => RpcError::Deserialize(e.description().into()),
-            },
-        )?))
+        let value = read_value(r).map_err(|e| RpcError::Read(e.description().into()))?;
+        log::debug!("< Nvim: {:?}", value);
+        let inner: NvimMessage = from_value(value).map_err(|e| RpcError::Deserialize(e.description().into()))?;
+        let r = Some(inner);
+
+        Ok(r)
     }
 
     fn write(self, w: &mut impl Write) -> Result<(), RpcError> {
-        rmp_serde::encode::write(w, &self)
+        log::debug!("> Nvim: {:?}", self);
+
+        let value = to_value(self)
             .map_err(|e| RpcError::Serialize(e.description().into()))?;
+        write_value(w, &value)
+            .map_err(|e| RpcError::Write(e.description().into()))?;
         w.flush()
             .map_err(|e| RpcError::Write(e.description().into()))?;
+
         Ok(())
     }
 

@@ -99,13 +99,21 @@ impl<M: Message> Client<M> {
         let reader = thread::spawn(move || {
             let io_reader = get_reader();
             let mut buf_read = BufReader::new(io_reader);
-            while let Some(msg) = M::read(&mut buf_read)? {
-                let is_exit = msg.is_exit();
+            loop {
+                match M::read(&mut buf_read) {
+                    Ok(Some(msg)) => {
+                        let is_exit = msg.is_exit();
 
-                reader_sender.send(msg).unwrap();
+                        reader_sender.send(msg).unwrap();
 
-                if is_exit {
-                    break;
+                        if is_exit {
+                            break;
+                        }
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        log::error!("Error reading message: {:?}", e)
+                    }
                 }
             }
             Ok(())
