@@ -10,9 +10,9 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString, MarkupContent,
-    MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
-    TextDocumentIdentifier, TextEdit,
+    CompletionItem, CompletionTriggerKind, GotoCapability, Hover, HoverCapability, HoverContents,
+    Location, MarkedString, MarkupContent, MarkupKind, Position, ShowMessageParams,
+    TextDocumentClientCapabilities, TextDocumentIdentifier, TextEdit,
 };
 use rmp_serde::Deserializer;
 use rmpv::Value;
@@ -189,6 +189,15 @@ fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
         .map(String::len)
         .fold(0, |acc, current| acc + current + 1)
         + pos.character as usize
+}
+
+fn to_trigger_kind(kind: u64) -> Option<CompletionTriggerKind> {
+    match kind {
+        1 => Some(CompletionTriggerKind::Invoked),
+        2 => Some(CompletionTriggerKind::TriggerCharacter),
+        3 => Some(CompletionTriggerKind::TriggerForIncompleteCompletions),
+        _ => None,
+    }
 }
 
 fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -372,6 +381,55 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     lang_id,
                     text_document,
                     text_document_lines,
+                })
+            }
+        }
+        NvimMessage::RpcNotification {
+            ref method,
+            ref params,
+        } if method == "completion" => {
+            if params.len() < 1 {
+                Err(EditorError::Parse("Wrong amount of params for completion"))
+            } else {
+                let lang_id = params[0]
+                    .as_str()
+                    .ok_or(EditorError::Parse("Invalid lang_id param for completion"))?
+                    .to_owned();
+                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
+                    "Invalid text_document param for completion",
+                ))?;
+                let text_document = to_text_document(text_document_str).ok_or(
+                    EditorError::Parse("Can't parse text_document param for completion"),
+                )?;
+                let position_map = params[2]
+                    .as_map()
+                    .ok_or(EditorError::Parse("Invalid position param for completion"))?;
+                let position = to_position(position_map).ok_or(EditorError::Parse(
+                    "Can't parse position param for completion",
+                ))?;
+
+                let trigger_kind_u64 = params[3].as_u64().ok_or(EditorError::Parse(
+                    "Invalid trigger_kind param for completion",
+                ))?;
+                let trigger_kind = to_trigger_kind(trigger_kind_u64).ok_or(EditorError::Parse(
+                    "Can't parse trigger_kind param for completion",
+                ))?;
+
+                let mut trigger_character = None;
+
+                if trigger_kind == CompletionTriggerKind::TriggerCharacter {
+                    let trigger_character_str = params[4].as_str().ok_or(EditorError::Parse(
+                        "Invalid trigger_character param for completion",
+                    ))?;
+                    trigger_character = Some(String::from(trigger_character_str));
+                }
+
+                Ok(Event::RequestCompletion {
+                    lang_id,
+                    text_document,
+                    position,
+                    trigger_kind,
+                    trigger_character,
                 })
             }
         }
@@ -628,6 +686,26 @@ impl Editor for Neovim {
         )?;
         Ok(())
     }
+
+    fn show_completions(
+        &self,
+        column: u64,
+        completion_items: &Vec<CompletionItem>,
+    ) -> Result<(), EditorError> {
+        let mut vim_complete_items = vec![];
+        for item in completion_items {
+            vim_complete_items.push(Value::Map(vec![
+                ("icase".into(), 1.into()),
+                ("word".into(), item.label.clone().into()),
+                ("abbr".into(), item.label.clone().into()),
+            ]));
+        }
+        self.call_function(
+            "complete",
+            vec![column.into(), Value::Array(vim_complete_items)],
+        )?;
+        Ok(())
+    }
 }
 
 impl Message for NvimMessage {
@@ -825,4 +903,3 @@ mod tests {
         assert_eq!(editted_content, expected_content);
     }
 }
-

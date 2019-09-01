@@ -4,17 +4,20 @@ pub mod msg;
 pub mod types;
 
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
-    collections::HashMap
 };
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize, Formatting},
-    Hover, Location, Position, ShowMessageParams, TextDocumentIdentifier, DocumentFormattingParams,
-    FormattingOptions, TextEdit
+    request::{
+        Completion, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize,
+    },
+    CompletionContext, CompletionItem, CompletionParams, CompletionResponse, CompletionTriggerKind,
+    DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
+    TextDocumentIdentifier, TextDocumentPositionParams, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -30,7 +33,7 @@ pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
     pub indentation: u64,
-    pub indentation_with_space: bool
+    pub indentation_with_space: bool,
 }
 
 #[derive(Debug)]
@@ -59,7 +62,14 @@ pub enum Event {
         lang_id: String,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
-    }
+    },
+    RequestCompletion {
+        lang_id: String,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+        trigger_kind: CompletionTriggerKind,
+        trigger_character: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -141,6 +151,11 @@ pub trait Editor: 'static {
     fn show_message(&self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn show_completions(
+        &self,
+        column: u64,
+        completion_items: &Vec<CompletionItem>,
+    ) -> Result<(), EditorError>;
 }
 
 pub struct Lspc<E: Editor> {
@@ -217,11 +232,15 @@ impl<E: Editor> Lspc<E> {
                 let capabilities = self.editor.capabilities();
                 let lang_settings = LangSettings {
                     indentation: config.indentation,
-                    indentation_with_space: config.indentation_with_space
+                    indentation_with_space: config.indentation_with_space,
                 };
-                let mut lsp_handler =
-                    LangServerHandler::new(lang_id, &config.command[0], lang_settings, &config.command[1..])
-                        .map_err(|e| LspcError::LangServer(e))?;
+                let mut lsp_handler = LangServerHandler::new(
+                    lang_id,
+                    &config.command[0],
+                    lang_settings,
+                    &config.command[1..],
+                )
+                .map_err(|e| LspcError::LangServer(e))?;
                 let cur_path = PathBuf::from(cur_path);
                 let root = find_root_path(&cur_path, &config.root_markers)
                     .map(|path| path.to_str())
@@ -326,7 +345,7 @@ impl<E: Editor> Lspc<E> {
             Event::FormatDoc {
                 lang_id,
                 text_document_lines,
-                text_document
+                text_document,
             } => {
                 let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
                 let options = FormattingOptions {
@@ -334,7 +353,10 @@ impl<E: Editor> Lspc<E> {
                     insert_spaces: handler.lang_settings.indentation_with_space,
                     properties: HashMap::new(),
                 };
-                let params = DocumentFormattingParams { text_document, options };
+                let params = DocumentFormattingParams {
+                    text_document,
+                    options,
+                };
                 handler.lsp_request::<Formatting>(
                     params,
                     Box::new(move |editor: &mut E, _handler, response| {
@@ -343,7 +365,45 @@ impl<E: Editor> Lspc<E> {
                         }
 
                         Ok(())
-                    })
+                    }),
+                )?;
+            }
+            Event::RequestCompletion {
+                lang_id,
+                text_document,
+                position,
+                trigger_kind,
+                trigger_character,
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let text_document_position = TextDocumentPositionParams {
+                    text_document,
+                    position,
+                };
+                let context = Some(CompletionContext {
+                    trigger_kind,
+                    trigger_character,
+                });
+                let params = CompletionParams {
+                    text_document_position,
+                    context,
+                };
+                handler.lsp_request::<Completion>(
+                    params,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(completion_list) = response {
+                            match completion_list {
+                                CompletionResponse::Array(items) => {
+                                    editor.show_completions(position.character, &items)?;
+                                }
+                                CompletionResponse::List(list) => {
+                                    editor.show_completions(position.character, &list.items)?;
+                                }
+                            }
+                        }
+
+                        Ok(())
+                    }),
                 )?;
             }
         }
