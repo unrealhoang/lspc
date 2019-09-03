@@ -111,9 +111,7 @@ impl<M: Message> Client<M> {
                         }
                     }
                     Ok(None) => continue,
-                    Err(e) => {
-                        log::error!("Error reading message: {:?}", e)
-                    }
+                    Err(e) => log::error!("Error reading message: {:?}", e),
                 }
             }
             Ok(())
