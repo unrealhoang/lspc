@@ -2,8 +2,6 @@ function! lspc#config()
 
 endfunction
 
-let s:root = expand('<sfile>:p:h:h')
-
 function! lspc#output(log)
   " if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
   "   let s:output_buffer = nvim_create_buf(v:true, v:false)
@@ -42,10 +40,7 @@ endfunction
 
 function! lspc#destroy()
   call jobstop(s:job_id)
-endfunction
-
-function! lspc#current_file_type()
-
+  unlet! s:job_id
 endfunction
 
 function! lspc#start_lang_server()
@@ -95,3 +90,9 @@ endfunction
 function! lspc#debug()
   echo "Output Buffer: " . s:output_buffer
 endfunction
+
+let s:root = expand('<sfile>:p:h:h')
+
+if !exists('s:job_id')
+  lspc#init()
+endif
