@@ -250,60 +250,34 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     text_document: format_doc_params.1,
                     text_document_lines: format_doc_params.2,
                 })
+            } else if method == "completion" {
+                #[derive(Deserialize)]
+                struct CompletionParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                    CompletionTriggerKind,
+                    Option<String>,
+                );
+
+                let completion_params: CompletionParams =
+                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
+                        EditorError::Parse("failed to parse completion params")
+                    })?;
+
+                Ok(Event::RequestCompletion {
+                    lang_id: completion_params.0,
+                    text_document: completion_params.1,
+                    position: completion_params.2,
+                    trigger_kind: completion_params.3,
+                    trigger_character: completion_params.4,
+                })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
                     "unexpected notification {:?} {:?}",
                     method, params
                 )))
-            }
-        }
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "completion" => {
-            if params.len() < 1 {
-                Err(EditorError::Parse("Wrong amount of params for completion"))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for completion"))?
-                    .to_owned();
-                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
-                    "Invalid text_document param for completion",
-                ))?;
-                let text_document = to_text_document(text_document_str).ok_or(
-                    EditorError::Parse("Can't parse text_document param for completion"),
-                )?;
-                let position_map = params[2]
-                    .as_map()
-                    .ok_or(EditorError::Parse("Invalid position param for completion"))?;
-                let position = to_position(position_map).ok_or(EditorError::Parse(
-                    "Can't parse position param for completion",
-                ))?;
-
-                let trigger_kind_u64 = params[3].as_u64().ok_or(EditorError::Parse(
-                    "Invalid trigger_kind param for completion",
-                ))?;
-                let trigger_kind = to_trigger_kind(trigger_kind_u64).ok_or(EditorError::Parse(
-                    "Can't parse trigger_kind param for completion",
-                ))?;
-
-                let mut trigger_character = None;
-
-                if trigger_kind == CompletionTriggerKind::TriggerCharacter {
-                    let trigger_character_str = params[4].as_str().ok_or(EditorError::Parse(
-                        "Invalid trigger_character param for completion",
-                    ))?;
-                    trigger_character = Some(String::from(trigger_character_str));
-                }
-
-                Ok(Event::RequestCompletion {
-                    lang_id,
-                    text_document,
-                    position,
-                    trigger_kind,
-                    trigger_character,
-                })
             }
         }
         _ => Err(EditorError::UnexpectedMessage(format!("{:?}", msg))),

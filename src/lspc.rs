@@ -12,9 +12,12 @@ use std::{
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
+    request::{
+        Completion, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize,
+    },
+    CompletionContext, CompletionItem, CompletionParams, CompletionResponse, CompletionTriggerKind,
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
-    TextDocumentIdentifier, TextEdit,
+    TextDocumentIdentifier, TextDocumentPositionParams, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
