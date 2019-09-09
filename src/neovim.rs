@@ -39,7 +39,7 @@ pub struct Neovim {
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
     // Map from bufnr to LangId
-    buf_mapper: HashMap<u64, String>,
+    buf_mapper: HashMap<BufferHandler, String>,
 }
 
 pub trait ToDisplay {
@@ -252,11 +252,11 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                 );
-                let did_open_params: DidOpenParams = Deserialize::deserialize(params)
+                let did_open_params: (DidOpenParams,) = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse did_open params"))?;
 
                 Ok(Event::DidOpen {
-                    text_document: did_open_params.0,
+                    text_document: (did_open_params.0).0,
                 })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
@@ -556,7 +556,7 @@ impl Editor for Neovim {
         lang_id: &str,
     ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
-        let mut results = self.call_atomic(&[
+        let results = self.call_atomic(&[
             vec![
                 "nvim_buf_attach".into(),
                 Value::Array(vec![
@@ -569,17 +569,23 @@ impl Editor for Neovim {
             vec!["nvim_get_current_buf".into(), Value::Array(Vec::new())].into(),
         ])?;
 
-        if results.len() != 2 {
-            Err(EditorError::UnexpectedResponse("Wrong number of response"))
-        } else {
-            let cur_bufnr = results
-                .pop()
-                .unwrap()
-                .as_u64()
-                .ok_or(EditorError::UnexpectedResponse("Expect integer bufnr"))?;
+        #[derive(Deserialize)]
+        struct AtomicError(i64, String, String);
 
-            self.buf_mapper.insert(cur_bufnr, lang_id.to_owned());
+        #[derive(Deserialize)]
+        struct CallResult(
+            (bool, NvimHandle),
+            Option<AtomicError>
+        );
+
+        let r: CallResult = Deserialize::deserialize(Value::from(results))
+            .map_err(|_e| EditorError::Parse("can not parse call result"))?;
+        let cur_bufnr = (r.0).1;
+        if let NvimHandle::Buffer(handle) = cur_bufnr {
+            self.buf_mapper.insert(handle, lang_id.to_owned());
             Ok(())
+        } else {
+            Err(EditorError::UnexpectedResponse("Expect buffer handler"))
         }
     }
 }
@@ -611,6 +617,76 @@ impl Message for NvimMessage {
             NvimMessage::RpcNotification { method, .. } => method == "exit",
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct BufferHandler(i64);
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct WindowHandler(i64);
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct TabpageHandler(i64);
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum NvimHandle {
+    Buffer(BufferHandler),
+    Window(WindowHandler),
+    Tabpage(TabpageHandler)
+}
+
+impl<'de> Deserialize<'de> for NvimHandle {
+    fn deserialize<D>(deserializer: D) -> Result<NvimHandle, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NvimHandleVisitor;
+        impl<'de> Visitor<'de> for NvimHandleVisitor {
+            type Value = NvimHandle;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("_ExtStruct((i8, &[u8]))")
+            }
+
+            fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+                where D: serde::Deserializer<'de>
+            {
+                let (tag, bytes): (i8, serde_bytes::ByteBuf) = Deserialize::deserialize(deserializer)?;
+
+                let handle: i64 = match bytes.len() {
+                    1 => { bytes[0] as i8 as i64 },
+                    2 => {
+                        let mut b: [u8; 2] = [0; 2];
+                        b.copy_from_slice(&bytes[..]);
+                        i16::from_le_bytes(b) as i64
+                    }
+                    4 => {
+                        let mut b: [u8; 4] = [0; 4];
+                        b.copy_from_slice(&bytes[..]);
+                        i32::from_le_bytes(b) as i64
+                    }
+                    8 => {
+                        let mut b: [u8; 8] = [0; 8];
+                        b.copy_from_slice(&bytes[..]);
+                        i64::from_le_bytes(b)
+                    }
+                    _ => return Err(<D::Error as de::Error>::custom("invalid bytes length"))
+                };
+
+                match tag {
+                    0 => {
+                        Ok(NvimHandle::Buffer(BufferHandler(handle)))
+                    }
+                    1 => {
+                        Ok(NvimHandle::Window(WindowHandler(handle)))
+                    }
+                    2 => {
+                        Ok(NvimHandle::Tabpage(TabpageHandler(handle)))
+                    }
+                    _ => Err(<D::Error as de::Error>::custom("unknown tag"))
+                }
+            }
+        }
+
+        deserializer.deserialize_newtype_struct(rmpv::MSGPACK_EXT_STRUCT_NAME, NvimHandleVisitor)
     }
 }
 
@@ -857,5 +933,13 @@ mod tests {
         };
 
         assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+    }
+
+    #[test]
+    fn test_deserialize_buffer_handler() {
+        let v = Value::Ext(0, vec![13]);
+        let handle: NvimHandle = Deserialize::deserialize(v).unwrap();
+
+        assert_eq!(NvimHandle::Buffer(BufferHandler(13)), handle);
     }
 }

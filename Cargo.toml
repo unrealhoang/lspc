@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 serde = { version = "*", features = ["derive"] }
+serde_bytes = "*"
 crossbeam = "*"
 rmpv = { git = "https://github.com/unrealhoang/msgpack-rust", branch = "support-serde-ext", version = "*", features = ["with-serde"] }
 url_serde = "*"
