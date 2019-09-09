@@ -258,13 +258,12 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     TextDocumentIdentifier,
                     Position,
                     CompletionTriggerKind,
-                    Option<String>,
+                    #[serde(default)] Option<String>,
                 );
 
                 let completion_params: CompletionParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse completion params")
-                    })?;
+                    Deserialize::deserialize(Value::from(params))
+                        .map_err(|_e| EditorError::Parse("failed to parse completion params"))?;
 
                 Ok(Event::RequestCompletion {
                     lang_id: completion_params.0,
