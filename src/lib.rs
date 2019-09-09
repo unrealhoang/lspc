@@ -4,5 +4,4 @@ pub mod lspc;
 pub mod neovim;
 pub mod rpc;
 
-pub use lspc::Lspc;
-
+pub use crate::lspc::Lspc;

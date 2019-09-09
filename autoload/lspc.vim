@@ -14,7 +14,7 @@ function! lspc#output(log)
 
   " let l:line = nvim_buf_line_count(s:output_buffer) - 1
   " call nvim_buf_set_lines(s:output_buffer, l:line, l:line, v:true, a:log)
-  echo a:log
+  echom string(a:log)
 endfunction
 
 function! s:echo_handler(job_id, data, name)

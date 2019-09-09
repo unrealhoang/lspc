@@ -7,9 +7,8 @@ edition = "2018"
 [dependencies]
 serde = { version = "1.0.83", features = ["derive"] }
 crossbeam = "*"
-rmpv = { version = "*", features = ["with-serde"] }
-rmp-serde = "*"
-url_serde = "0.2.0"
+rmpv = { git = "https://github.com/unrealhoang/msgpack-rust", branch = "support-serde-ext", version = "*", features = ["with-serde"] }
+url_serde = "*"
 serde_json = "*"
 log = "*"
 lazy_static = "1.3.0"

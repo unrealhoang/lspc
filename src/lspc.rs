@@ -12,12 +12,9 @@ use std::{
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
     notification::ShowMessage,
-    request::{
-        Completion, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize,
-    },
-    CompletionContext, CompletionItem, CompletionParams, CompletionResponse, CompletionTriggerKind,
+    request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
-    TextDocumentIdentifier, TextDocumentPositionParams, TextEdit,
+    TextDocumentIdentifier, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -28,15 +25,17 @@ use self::{
     types::{InlayHint, InlayHints, InlayHintsParams},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct LsConfig {
     pub command: Vec<String>,
     pub root_markers: Vec<String>,
+    #[serde(default)]
     pub indentation: u64,
+    #[serde(default)]
     pub indentation_with_space: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Event {
     Hello,
     StartServer {
