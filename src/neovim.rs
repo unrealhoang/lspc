@@ -14,8 +14,12 @@ use lsp_types::{
     MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
     TextDocumentIdentifier, TextEdit,
 };
-use rmp_serde::Deserializer;
-use rmpv::Value;
+use rmpv::{
+    decode::read_value,
+    encode::write_value,
+    ext::{from_value, to_value},
+    Value,
+};
 use serde::{
     self,
     de::{self, SeqAccess, Visitor},
@@ -111,53 +115,6 @@ impl ToDisplay for str {
     }
 }
 
-// Todo: cut down these parsing logic by implement Deserializer for Value
-pub fn from_value(config_value: &Value) -> Option<LsConfig> {
-    let mut root_markers = None;
-    let mut command = None;
-    let mut indentation = 4;
-    let mut indentation_with_space = true;
-    for (k, v) in config_value.as_map()?.iter().filter_map(|(key, value)| {
-        let k = key.as_str()?;
-        Some((k, value))
-    }) {
-        if k == "command" {
-            let data = v
-                .as_array()?
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(|s| String::from(s))
-                .collect::<Vec<String>>();
-
-            if data.len() > 1 {
-                command = Some(data);
-            }
-        } else if k == "root_markers" {
-            let data = v
-                .as_array()?
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(|s| String::from(s))
-                .collect::<Vec<String>>();
-            root_markers = Some(data);
-        } else if k == "indentation" {
-            indentation = v.as_u64()?;
-        } else if k == "indentation_with_space" {
-            indentation_with_space = v.as_bool()?;
-        }
-    }
-    if let (Some(root_markers), Some(command)) = (root_markers, command) {
-        Some(LsConfig {
-            root_markers,
-            command,
-            indentation,
-            indentation_with_space,
-        })
-    } else {
-        None
-    }
-}
-
 fn apply_edits(lines: &Vec<String>, edits: &Vec<TextEdit>) -> String {
     let mut sorted_edits = edits.clone();
     let mut editted_content = lines.join("\n");
@@ -191,188 +148,113 @@ fn to_document_offset(lines: &Vec<String>, pos: Position) -> usize {
         + pos.character as usize
 }
 
-fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
-    let uri = Url::from_file_path(s).ok()?;
-    Some(TextDocumentIdentifier::new(uri))
-}
+fn text_document_from_path_str<'de, D>(deserializer: D) -> Result<TextDocumentIdentifier, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = Deserialize::deserialize(deserializer)?;
+    let uri = Url::from_file_path(s)
+        .map_err(|_| <D::Error as de::Error>::custom("could not convert path to URI"))?;
 
-fn to_position(s: &Vec<(Value, Value)>) -> Option<Position> {
-    let mut line = None;
-    let mut character = None;
-
-    for (k, v) in s.iter().filter_map(|(key, value)| {
-        let k = key.as_str()?;
-        Some((k, value))
-    }) {
-        if k == "line" {
-            let data = v.as_u64()?;
-            line = Some(data);
-        } else if k == "character" {
-            let data = v.as_u64()?;
-            character = Some(data);
-        }
-    }
-    if let (Some(line), Some(character)) = (line, character) {
-        Some(Position::new(line, character))
-    } else {
-        None
-    }
+    Ok(TextDocumentIdentifier::new(uri))
 }
 
 fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
-        NvimMessage::RpcNotification { ref method, .. } if method == "hello" => Ok(Event::Hello),
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "start_lang_server" => {
-            if params.len() < 3 {
-                Err(EditorError::Parse(
-                    "Wrong amount of params for start_lang_server",
-                ))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse(
-                        "Invalid lang_id param for start_lang_server",
-                    ))?
-                    .to_owned();
-                let config =
-                    from_value(&params[1]).ok_or(EditorError::Parse("Failed to parse Config"))?;
-                let cur_path = params[2]
-                    .as_str()
-                    .ok_or(EditorError::Parse(
-                        "Invalid path param for start_lang_server",
-                    ))?
-                    .to_owned();
+        NvimMessage::RpcNotification { method, params } => {
+            if method == "hello" {
+                Ok(Event::Hello)
+            } else if method == "start_lang_server" {
+                #[derive(Deserialize)]
+                struct StartLangServerParams(String, LsConfig, String);
+
+                let start_lang_params: StartLangServerParams =
+                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
+                        EditorError::Parse("failed to parse start lang server params")
+                    })?;
+
                 Ok(Event::StartServer {
-                    lang_id,
-                    config,
-                    cur_path,
+                    lang_id: start_lang_params.0,
+                    config: start_lang_params.1,
+                    cur_path: start_lang_params.2,
                 })
-            }
-        }
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "hover" => {
-            if params.len() < 3 {
-                Err(EditorError::Parse("Wrong amount of params for hover"))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
-                    .to_owned();
-                let text_document_str = params[1]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
-                let text_document = to_text_document(text_document_str).ok_or(
-                    EditorError::Parse("Can't parse text_document param for hover"),
-                )?;
-                let position_map = params[2]
-                    .as_map()
-                    .ok_or(EditorError::Parse("Invalid position param for hover"))?;
-                let position = to_position(position_map)
-                    .ok_or(EditorError::Parse("Can't parse position param for hover"))?;
+            } else if method == "hover" {
+                #[derive(Deserialize)]
+                struct HoverParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                );
+
+                let hover_params: HoverParams = Deserialize::deserialize(Value::from(params))
+                    .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
                 Ok(Event::Hover {
-                    lang_id,
-                    text_document,
-                    position,
+                    lang_id: hover_params.0,
+                    text_document: hover_params.1,
+                    position: hover_params.2,
                 })
-            }
-        }
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "goto_definition" => {
-            if params.len() < 3 {
-                Err(EditorError::Parse("Wrong amount of params for hover"))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
-                    .to_owned();
-                let text_document_str = params[1]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
-                let text_document = to_text_document(text_document_str).ok_or(
-                    EditorError::Parse("Can't parse text_document param for hover"),
-                )?;
-                let position_map = params[2]
-                    .as_map()
-                    .ok_or(EditorError::Parse("Invalid position param for hover"))?;
-                let position = to_position(position_map)
-                    .ok_or(EditorError::Parse("Can't parse position param for hover"))?;
+            } else if method == "goto_definition" {
+                #[derive(Deserialize)]
+                struct GotoDefinitionParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                );
+
+                let goto_definition_params: GotoDefinitionParams =
+                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
+                        EditorError::Parse("failed to parse goto definition params")
+                    })?;
 
                 Ok(Event::GotoDefinition {
-                    lang_id,
-                    text_document,
-                    position,
+                    lang_id: goto_definition_params.0,
+                    text_document: goto_definition_params.1,
+                    position: goto_definition_params.2,
                 })
-            }
-        }
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "inlay_hints" => {
-            if params.len() < 2 {
-                Err(EditorError::Parse("Wrong amount of params for hover"))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid lang_id param for hover"))?
-                    .to_owned();
-                let text_document_str = params[1]
-                    .as_str()
-                    .ok_or(EditorError::Parse("Invalid text_document param for hover"))?;
-                let text_document = to_text_document(text_document_str).ok_or(
-                    EditorError::Parse("Can't parse text_document param for hover"),
-                )?;
+            } else if method == "inlay_hints" {
+                #[derive(Deserialize)]
+                struct InlayHintsParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                );
+
+                let inlay_hints_params: InlayHintsParams =
+                    Deserialize::deserialize(Value::from(params))
+                        .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
                 Ok(Event::InlayHints {
-                    lang_id,
-                    text_document,
+                    lang_id: inlay_hints_params.0,
+                    text_document: inlay_hints_params.1,
                 })
-            }
-        }
-        NvimMessage::RpcNotification {
-            ref method,
-            ref params,
-        } if method == "format_doc" => {
-            if params.len() < 1 {
-                Err(EditorError::Parse(
-                    "Wrong amount of params for format document",
-                ))
-            } else {
-                let lang_id = params[0]
-                    .as_str()
-                    .ok_or(EditorError::Parse(
-                        "Invalid lang_id param for format document",
-                    ))?
-                    .to_owned();
-                let text_document_str = params[1].as_str().ok_or(EditorError::Parse(
-                    "Invalid text_document param for format document",
-                ))?;
-                let text_document = to_text_document(text_document_str).ok_or(
-                    EditorError::Parse("Can't parse text_document param for format document"),
-                )?;
+            } else if method == "format_doc" {
+                #[derive(Deserialize)]
+                struct FormatDocParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Vec<String>,
+                );
 
-                let text_document_lines: Vec<String> = params[2]
-                    .as_array()
-                    .ok_or(EditorError::Parse(
-                        "Invalid text_document_lines param for format document",
-                    ))?
-                    .into_iter()
-                    .map(|line| line.as_str().unwrap().to_owned())
-                    .collect();
+                let format_doc_params: FormatDocParams =
+                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
+                        EditorError::Parse("failed to parse goto definition params")
+                    })?;
 
                 Ok(Event::FormatDoc {
-                    lang_id,
-                    text_document,
-                    text_document_lines,
+                    lang_id: format_doc_params.0,
+                    text_document: format_doc_params.1,
+                    text_document_lines: format_doc_params.2,
                 })
+            } else {
+                Err(EditorError::UnexpectedMessage(format!(
+                    "unexpected notification {:?} {:?}",
+                    method, params
+                )))
             }
         }
         _ => Err(EditorError::UnexpectedMessage(format!("{:?}", msg))),
@@ -423,7 +305,7 @@ impl Neovim {
         let req = NvimMessage::RpcRequest {
             msgid,
             method: method.into(),
-            params,
+            params: Value::from(params),
         };
 
         let (response_sender, response_receiver) = channel::bounded::<NvimMessage>(1);
@@ -440,7 +322,7 @@ impl Neovim {
     pub fn notify(&self, method: &str, params: Vec<Value>) -> Result<(), EditorError> {
         let noti = NvimMessage::RpcNotification {
             method: method.into(),
-            params,
+            params: Value::from(params),
         };
         // FIXME: add RpcQueueFull to EditorError??
         self.rpc_client.sender.send(noti).unwrap();
@@ -632,23 +514,23 @@ impl Editor for Neovim {
 
 impl Message for NvimMessage {
     fn read(r: &mut impl BufRead) -> Result<Option<NvimMessage>, RpcError> {
-        let mut deserializer = Deserializer::new(r);
-        Ok(Some(Deserialize::deserialize(&mut deserializer).map_err(
-            |e| match e {
-                rmp_serde::decode::Error::InvalidMarkerRead(_)
-                | rmp_serde::decode::Error::InvalidDataRead(_) => {
-                    RpcError::Read(e.description().into())
-                }
-                _ => RpcError::Deserialize(e.description().into()),
-            },
-        )?))
+        let value = read_value(r).map_err(|e| RpcError::Read(e.description().into()))?;
+        log::debug!("< Nvim: {:?}", value);
+        let inner: NvimMessage =
+            from_value(value).map_err(|e| RpcError::Deserialize(e.description().into()))?;
+        let r = Some(inner);
+
+        Ok(r)
     }
 
     fn write(self, w: &mut impl Write) -> Result<(), RpcError> {
-        rmp_serde::encode::write(w, &self)
-            .map_err(|e| RpcError::Serialize(e.description().into()))?;
+        log::debug!("> Nvim: {:?}", self);
+
+        let value = to_value(self).map_err(|e| RpcError::Serialize(e.description().into()))?;
+        write_value(w, &value).map_err(|e| RpcError::Write(e.description().into()))?;
         w.flush()
             .map_err(|e| RpcError::Write(e.description().into()))?;
+
         Ok(())
     }
 
@@ -665,7 +547,7 @@ pub enum NvimMessage {
     RpcRequest {
         msgid: u64,
         method: String,
-        params: Vec<Value>,
+        params: Value,
     }, // 0
     RpcResponse {
         msgid: u64,
@@ -674,7 +556,7 @@ pub enum NvimMessage {
     }, // 1
     RpcNotification {
         method: String,
-        params: Vec<Value>,
+        params: Value,
     }, // 2
 }
 
@@ -692,10 +574,10 @@ impl Serialize for NvimMessage {
                 params,
             } => {
                 let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element(&Value::from(0))?;
-                seq.serialize_element(&Value::from(*msgid))?;
-                seq.serialize_element(&Value::from(method.clone()))?;
-                seq.serialize_element(&Value::from(params.clone()))?;
+                seq.serialize_element(&0)?;
+                seq.serialize_element(&msgid)?;
+                seq.serialize_element(&method)?;
+                seq.serialize_element(&params)?;
                 seq.end()
             }
             RpcResponse {
@@ -704,17 +586,17 @@ impl Serialize for NvimMessage {
                 result,
             } => {
                 let mut seq = serializer.serialize_seq(Some(4))?;
-                seq.serialize_element(&Value::from(1))?;
-                seq.serialize_element(&Value::from(*msgid))?;
-                seq.serialize_element(&Value::from(error.clone()))?;
-                seq.serialize_element(&Value::from(result.clone()))?;
+                seq.serialize_element(&1)?;
+                seq.serialize_element(&msgid)?;
+                seq.serialize_element(&error)?;
+                seq.serialize_element(&result)?;
                 seq.end()
             }
             RpcNotification { method, params } => {
                 let mut seq = serializer.serialize_seq(Some(3))?;
-                seq.serialize_element(&Value::from(2))?;
-                seq.serialize_element(&Value::from(method.clone()))?;
-                seq.serialize_element(&Value::from(params.clone()))?;
+                seq.serialize_element(&2)?;
+                seq.serialize_element(&method)?;
+                seq.serialize_element(&params)?;
                 seq.end()
             }
         }
@@ -746,7 +628,7 @@ impl<'de> Visitor<'de> for RpcVisitor {
             let method: String = seq
                 .next_element()?
                 .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-            let params: Vec<Value> = seq
+            let params: Value = seq
                 .next_element()?
                 .ok_or_else(|| de::Error::invalid_length(3, &self))?;
 
@@ -775,7 +657,7 @@ impl<'de> Visitor<'de> for RpcVisitor {
             let method: String = seq
                 .next_element()?
                 .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-            let params: Vec<Value> = seq
+            let params: Value = seq
                 .next_element()?
                 .ok_or_else(|| de::Error::invalid_length(2, &self))?;
 
@@ -824,5 +706,84 @@ mod tests {
         let expected_content = String::from("fn a() {\n    print!(\"hello\");\n}");
         assert_eq!(editted_content, expected_content);
     }
-}
 
+    #[test]
+    fn test_deserialize_ls_config() {
+        let value = Value::Map(vec![
+            (
+                Value::from("root_markers"),
+                Value::from(vec![Value::from("Cargo.lock")]),
+            ),
+            (
+                Value::from("command"),
+                Value::from(vec![Value::from("rustup"), Value::from("run")]),
+            ),
+            (Value::from("indentation"), Value::from(4)),
+            (Value::from("indentation_with_space"), Value::from(true)),
+        ]);
+
+        let ls_config: LsConfig = Deserialize::deserialize(value).unwrap();
+        let expected = LsConfig {
+            command: vec!["rustup".to_owned(), "run".to_owned()],
+            root_markers: vec!["Cargo.lock".to_owned()],
+            indentation: 4,
+            indentation_with_space: true,
+        };
+
+        assert_eq!(expected, ls_config);
+    }
+
+    #[test]
+    fn test_deserialize_start_lang_server_params() {
+        let start_lang_server_msg = NvimMessage::RpcNotification {
+            method: String::from("start_lang_server"),
+            params: Value::from(vec![
+                Value::from("rust"),
+                Value::Map(vec![
+                    (
+                        Value::from("root_markers"),
+                        Value::from(vec![Value::from("Cargo.lock")]),
+                    ),
+                    (
+                        Value::from("command"),
+                        Value::from(vec![Value::from("rustup")]),
+                    ),
+                    (Value::from("indentation"), Value::from(4)),
+                    (Value::from("indentation_with_space"), Value::from(true)),
+                ]),
+                Value::from("/abc"),
+            ]),
+        };
+        let expected = Event::StartServer {
+            lang_id: String::from("rust"),
+            config: LsConfig {
+                command: vec![String::from("rustup")],
+                root_markers: vec![String::from("Cargo.lock")],
+                indentation: 4,
+                indentation_with_space: true,
+            },
+            cur_path: String::from("/abc"),
+        };
+        assert_eq!(expected, to_event(start_lang_server_msg).unwrap());
+    }
+
+    fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
+        let uri = Url::from_file_path(s).ok()?;
+        Some(TextDocumentIdentifier::new(uri))
+    }
+
+    #[test]
+    fn test_deserialize_inlay_hints_params() {
+        let inlay_hints_msg = NvimMessage::RpcNotification {
+            method: String::from("inlay_hints"),
+            params: Value::from(vec![Value::from("rust"), Value::from("/abc/d.rs")]),
+        };
+        let text_document = to_text_document("/abc/d.rs").unwrap();
+        let expected = Event::InlayHints {
+            lang_id: String::from("rust"),
+            text_document,
+        };
+
+        assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+    }
+}

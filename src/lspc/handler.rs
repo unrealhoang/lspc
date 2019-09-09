@@ -26,7 +26,7 @@ pub struct Callback<E: Editor> {
 
 pub struct LangSettings {
     pub indentation: u64,
-    pub indentation_with_space: bool
+    pub indentation_with_space: bool,
 }
 
 pub struct LangServerHandler<E: Editor> {
