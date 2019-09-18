@@ -1,0 +1,31 @@
+HOW TO SETUP A DEVELOPMENT ENVIRONMENT
+-------------------------------------
+
+The following describe the steps to setup a fresh VIM environment
+that you can use to test LSPC.
+
+First, create a new VIM profile folder at whereever you want, with
+the following folder structure, for example:
+
+  ~/development/vim
+  .
+  ├── autoload
+  │   └── plug.vim
+  └── init.vim
+
+You can download the plug.vim file from VimPlug repository [1]
+
+The content of init.vim can be this simple:
+
+  call plug#begin()
+  Plug '~/code/play/lspc/'
+  call plug#end()
+
+Then you can start VIM with the -u parameter pointing to your dev
+profile:
+
+  vim -u ~/development/vim/init.vim
+
+And that's it.
+
+[1]: https://github.com/junegunn/vim-plug
