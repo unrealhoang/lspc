@@ -1,7 +1,7 @@
 HOW TO SETUP A DEVELOPMENT ENVIRONMENT
 -------------------------------------
 
-The following describe the steps to setup a fresh VIM environment
+The following describe the steps to setup a minimal VIM environment
 that you can use to test LSPC.
 
 First, create a new VIM profile folder at whereever you want, with
@@ -21,6 +21,13 @@ The content of init.vim can be this simple:
   Plug '~/code/play/lspc/'
   call plug#end()
 
+  let g:lspc = {
+      \ 'rust': {
+      \     'root_markers': ['Cargo.lock'],
+      \     'command': ['rustup', 'run', 'stable', 'ra_lsp_server'],
+      \     },
+      \ }
+      
 Then you can start VIM with the -u parameter pointing to your dev
 profile:
 
