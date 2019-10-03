@@ -11,6 +11,7 @@ use std::{
 
 use crossbeam::channel::{Receiver, Select};
 use lsp_types::{
+    self as lsp,
     notification::{self as noti},
     request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
@@ -36,7 +37,7 @@ pub struct LsConfig {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Event {
+pub enum Event<B: BufferId> {
     Hello,
     StartServer {
         lang_id: String,
@@ -63,7 +64,13 @@ pub enum Event {
         text_document: TextDocumentIdentifier,
     },
     DidOpen {
+        buf_id: B,
         text_document: TextDocumentIdentifier,
+    },
+    DidChange {
+        buf_id: B,
+        version: i64,
+        content_change: lsp::TextDocumentContentChangeEvent
     },
 }
 
@@ -111,6 +118,13 @@ impl From<RawResponse> for LangServerError {
     }
 }
 
+impl From<MainLoopError> for LspcError
+{
+    fn from(e: MainLoopError) -> Self {
+        LspcError::MainLoop(e)
+    }
+}
+
 impl<T> From<T> for LspcError
 where
     T: Into<LangServerError>,
@@ -121,15 +135,25 @@ where
 }
 
 #[derive(Debug)]
+pub enum MainLoopError {
+    IgnoredMessage
+}
+
+#[derive(Debug)]
 pub enum LspcError {
     Editor(EditorError),
     LangServer(LangServerError),
+    MainLoop(MainLoopError),
     // Requested lang_id server is not started
     NotStarted,
 }
 
+pub trait BufferId: Eq + std::fmt::Debug + std::hash::Hash + 'static {}
+
 pub trait Editor: 'static {
-    fn events(&self) -> Receiver<Event>;
+    type BufferId: BufferId;
+
+    fn events(&self) -> Receiver<Event<Self::BufferId>>;
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
     fn message(&mut self, msg: &str) -> Result<(), EditorError>;
@@ -149,25 +173,41 @@ pub trait Editor: 'static {
     fn watch_file_events(
         &mut self,
         text_document: &TextDocumentIdentifier,
-        lang_id: &str,
     ) -> Result<(), EditorError>;
+}
+
+struct TrackingBuffer {
+    lang_id: String,
+    text_document: TextDocumentIdentifier,
+    sent_did_open: bool
+}
+
+impl TrackingBuffer {
+    fn new(lang_id: String, text_document: TextDocumentIdentifier) -> Self {
+        TrackingBuffer {
+            lang_id,
+            text_document,
+            sent_did_open: false
+        }
+    }
 }
 
 pub struct Lspc<E: Editor> {
     editor: E,
     lsp_handlers: Vec<LangServerHandler<E>>,
+    tracking_buffers: HashMap<E::BufferId, TrackingBuffer>,
 }
 
 #[derive(Debug)]
-enum SelectedMsg {
-    Editor(Event),
+enum SelectedMsg<B: BufferId> {
+    Editor(Event<B>),
     Lsp(usize, LspMessage),
 }
 
 fn select<E: Editor>(
-    event_receiver: &Receiver<Event>,
+    event_receiver: &Receiver<Event<E::BufferId>>,
     handlers: &Vec<LangServerHandler<E>>,
-) -> SelectedMsg {
+) -> SelectedMsg<E::BufferId> {
     let mut sel = Select::new();
     sel.recv(event_receiver);
     for lsp_client in handlers.iter() {
@@ -228,7 +268,15 @@ impl<E: Editor> Lspc<E> {
             .find(|handler| handler.lang_id == lang_id)
     }
 
-    fn handle_editor_event(&mut self, event: Event) -> Result<(), LspcError> {
+    fn handler_for_buffer(&mut self, buf_id: &E::BufferId) -> Option<(&mut LangServerHandler<E>, &mut TrackingBuffer)> {
+        let tracking_buffer = self.tracking_buffers.get_mut(buf_id)?;
+        let handler = self.lsp_handlers
+                .iter_mut()
+                .find(|handler| handler.lang_id == tracking_buffer.lang_id)?;
+        Some((handler, tracking_buffer))
+    }
+
+    fn handle_editor_event(&mut self, event: Event<E::BufferId>) -> Result<(), LspcError> {
         match event {
             Event::Hello => {
                 self.editor.say_hello().map_err(|e| LspcError::Editor(e))?;
@@ -380,13 +428,43 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
-            Event::DidOpen { text_document } => {
+            Event::DidOpen { buf_id, text_document } => {
                 let file_path = text_document.uri.path();
-                if let Some(handler) = handler_of(&mut self.lsp_handlers, &file_path) {
-                    self.editor
-                        .watch_file_events(&text_document, &handler.lang_id)?;
+                let handler = handler_of(&mut self.lsp_handlers, &file_path)
+                    .ok_or_else(|| {
+                        log::info!("Unmanaged file: {:?}", text_document.uri);
+                        MainLoopError::IgnoredMessage
+                    })?;
+
+                self.editor
+                    .watch_file_events(&text_document)?;
+                self.tracking_buffers.insert(buf_id, TrackingBuffer::new(handler.lang_id.clone(), text_document.clone()));
+            }
+            Event::DidChange { buf_id, version, content_change } => {
+                let (handler, tracking_buf) = self.handler_for_buffer(&buf_id)
+                    .ok_or_else(|| {
+                        log::info!("Received changed event for nontracking buffer: {:?}", buf_id);
+                        MainLoopError::IgnoredMessage
+                    })?;
+
+                if !tracking_buf.sent_did_open {
+                    handler.lsp_notify::<noti::DidOpenTextDocument>(lsp::DidOpenTextDocumentParams {
+                        text_document: lsp::TextDocumentItem {
+                            uri: tracking_buf.text_document.uri.clone(),
+                            language_id: tracking_buf.lang_id.clone(),
+                            version,
+                            text: content_change.text
+                        }
+                    })?;
+                    tracking_buf.sent_did_open = true;
                 } else {
-                    log::info!("Unmanaged file: {:?}", text_document.uri);
+                    handler.lsp_notify::<noti::DidChangeTextDocument>(lsp::DidChangeTextDocumentParams {
+                        text_document: lsp::VersionedTextDocumentIdentifier {
+                            uri: tracking_buf.text_document.uri.clone(),
+                            version: Some(version),
+                        },
+                        content_changes: vec![content_change]
+                    })?;
                 }
             }
         }
@@ -428,6 +506,7 @@ impl<E: Editor> Lspc<E> {
         Lspc {
             editor,
             lsp_handlers: Vec::new(),
+            tracking_buffers: HashMap::new(),
         }
     }
 

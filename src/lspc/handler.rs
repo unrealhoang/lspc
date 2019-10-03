@@ -7,7 +7,7 @@ use std::{
 
 use crossbeam::channel::Receiver;
 use lsp_types::{
-    notification::Initialized, request::Request, InitializeResult, ServerCapabilities,
+    notification::{Notification, Initialized}, request::Request, InitializeResult, ServerCapabilities,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -120,10 +120,8 @@ impl<E: Editor> LangServerHandler<E> {
 
     pub fn initialized(&mut self) -> Result<(), LangServerError> {
         log::debug!("Sending initialized notification");
-        let initialized_params = lsp_types::InitializedParams {};
-        let initialized_notification = RawNotification::new::<Initialized>(&initialized_params);
 
-        self.notify(initialized_notification)
+        self.lsp_notify::<Initialized>(lsp_types::InitializedParams {})
     }
 
     pub fn lsp_request<R: Request>(
@@ -155,7 +153,14 @@ impl<E: Editor> LangServerHandler<E> {
         self.send_msg(LspMessage::Request(request))
     }
 
-    pub fn notify(&mut self, not: RawNotification) -> Result<(), LangServerError> {
-        self.send_msg(LspMessage::Notification(not))
+    pub fn lsp_notify<R: Notification>(
+        &mut self,
+        params: R::Params,
+    ) -> Result<(), LangServerError>
+    where
+        R::Params: Serialize + Debug,
+    {
+        let noti = RawNotification::new::<R>(&params);
+        self.send_msg(LspMessage::Notification(noti))
     }
 }

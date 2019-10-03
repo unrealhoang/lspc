@@ -21,6 +21,10 @@ function! s:echo_handler(job_id, data, name)
 endfunction
 
 function! lspc#init()
+  if lspc#started()
+    return
+  endif
+
   let l:binpath = s:root . '/target/debug/neovim_lspc'
 
   call setenv('RUST_BACKTRACE', '1')
@@ -59,8 +63,9 @@ endfunction
 
 function! lspc#did_open()
   let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'did_open', l:cur_path)
+  call rpcnotify(s:job_id, 'did_open', buf_id, l:cur_path)
 endfunction
 
 function! lspc#goto_definition()
@@ -94,5 +99,5 @@ endfunction
 let s:root = expand('<sfile>:p:h:h')
 
 if !exists('s:job_id')
-  lspc#init()
+  call lspc#init()
 endif
