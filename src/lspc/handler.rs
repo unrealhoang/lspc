@@ -7,7 +7,9 @@ use std::{
 
 use crossbeam::channel::Receiver;
 use lsp_types::{
-    notification::{Notification, Initialized}, request::Request, InitializeResult, ServerCapabilities,
+    notification::{Initialized, Notification},
+    request::Request,
+    InitializeResult, ServerCapabilities,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -153,10 +155,7 @@ impl<E: Editor> LangServerHandler<E> {
         self.send_msg(LspMessage::Request(request))
     }
 
-    pub fn lsp_notify<R: Notification>(
-        &mut self,
-        params: R::Params,
-    ) -> Result<(), LangServerError>
+    pub fn lsp_notify<R: Notification>(&mut self, params: R::Params) -> Result<(), LangServerError>
     where
         R::Params: Serialize + Debug,
     {

@@ -70,7 +70,7 @@ pub enum Event<B: BufferId> {
     DidChange {
         buf_id: B,
         version: i64,
-        content_change: lsp::TextDocumentContentChangeEvent
+        content_change: lsp::TextDocumentContentChangeEvent,
     },
 }
 
@@ -118,8 +118,7 @@ impl From<RawResponse> for LangServerError {
     }
 }
 
-impl From<MainLoopError> for LspcError
-{
+impl From<MainLoopError> for LspcError {
     fn from(e: MainLoopError) -> Self {
         LspcError::MainLoop(e)
     }
@@ -136,7 +135,7 @@ where
 
 #[derive(Debug)]
 pub enum MainLoopError {
-    IgnoredMessage
+    IgnoredMessage,
 }
 
 #[derive(Debug)]
@@ -179,7 +178,7 @@ pub trait Editor: 'static {
 struct TrackingBuffer {
     lang_id: String,
     text_document: TextDocumentIdentifier,
-    sent_did_open: bool
+    sent_did_open: bool,
 }
 
 impl TrackingBuffer {
@@ -187,7 +186,7 @@ impl TrackingBuffer {
         TrackingBuffer {
             lang_id,
             text_document,
-            sent_did_open: false
+            sent_did_open: false,
         }
     }
 }
@@ -268,11 +267,15 @@ impl<E: Editor> Lspc<E> {
             .find(|handler| handler.lang_id == lang_id)
     }
 
-    fn handler_for_buffer(&mut self, buf_id: &E::BufferId) -> Option<(&mut LangServerHandler<E>, &mut TrackingBuffer)> {
+    fn handler_for_buffer(
+        &mut self,
+        buf_id: &E::BufferId,
+    ) -> Option<(&mut LangServerHandler<E>, &mut TrackingBuffer)> {
         let tracking_buffer = self.tracking_buffers.get_mut(buf_id)?;
-        let handler = self.lsp_handlers
-                .iter_mut()
-                .find(|handler| handler.lang_id == tracking_buffer.lang_id)?;
+        let handler = self
+            .lsp_handlers
+            .iter_mut()
+            .find(|handler| handler.lang_id == tracking_buffer.lang_id)?;
         Some((handler, tracking_buffer))
     }
 
@@ -428,43 +431,58 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
-            Event::DidOpen { buf_id, text_document } => {
+            Event::DidOpen {
+                buf_id,
+                text_document,
+            } => {
                 let file_path = text_document.uri.path();
-                let handler = handler_of(&mut self.lsp_handlers, &file_path)
-                    .ok_or_else(|| {
-                        log::info!("Unmanaged file: {:?}", text_document.uri);
-                        MainLoopError::IgnoredMessage
-                    })?;
+                let handler = handler_of(&mut self.lsp_handlers, &file_path).ok_or_else(|| {
+                    log::info!("Unmanaged file: {:?}", text_document.uri);
+                    MainLoopError::IgnoredMessage
+                })?;
 
-                self.editor
-                    .watch_file_events(&text_document)?;
-                self.tracking_buffers.insert(buf_id, TrackingBuffer::new(handler.lang_id.clone(), text_document.clone()));
+                self.editor.watch_file_events(&text_document)?;
+                self.tracking_buffers.insert(
+                    buf_id,
+                    TrackingBuffer::new(handler.lang_id.clone(), text_document.clone()),
+                );
             }
-            Event::DidChange { buf_id, version, content_change } => {
-                let (handler, tracking_buf) = self.handler_for_buffer(&buf_id)
-                    .ok_or_else(|| {
-                        log::info!("Received changed event for nontracking buffer: {:?}", buf_id);
+            Event::DidChange {
+                buf_id,
+                version,
+                content_change,
+            } => {
+                let (handler, tracking_buf) =
+                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                        log::info!(
+                            "Received changed event for nontracking buffer: {:?}",
+                            buf_id
+                        );
                         MainLoopError::IgnoredMessage
                     })?;
 
                 if !tracking_buf.sent_did_open {
-                    handler.lsp_notify::<noti::DidOpenTextDocument>(lsp::DidOpenTextDocumentParams {
-                        text_document: lsp::TextDocumentItem {
-                            uri: tracking_buf.text_document.uri.clone(),
-                            language_id: tracking_buf.lang_id.clone(),
-                            version,
-                            text: content_change.text
-                        }
-                    })?;
+                    handler.lsp_notify::<noti::DidOpenTextDocument>(
+                        lsp::DidOpenTextDocumentParams {
+                            text_document: lsp::TextDocumentItem {
+                                uri: tracking_buf.text_document.uri.clone(),
+                                language_id: tracking_buf.lang_id.clone(),
+                                version,
+                                text: content_change.text,
+                            },
+                        },
+                    )?;
                     tracking_buf.sent_did_open = true;
                 } else {
-                    handler.lsp_notify::<noti::DidChangeTextDocument>(lsp::DidChangeTextDocumentParams {
-                        text_document: lsp::VersionedTextDocumentIdentifier {
-                            uri: tracking_buf.text_document.uri.clone(),
-                            version: Some(version),
+                    handler.lsp_notify::<noti::DidChangeTextDocument>(
+                        lsp::DidChangeTextDocumentParams {
+                            text_document: lsp::VersionedTextDocumentIdentifier {
+                                uri: tracking_buf.text_document.uri.clone(),
+                                version: Some(version),
+                            },
+                            content_changes: vec![content_change],
                         },
-                        content_changes: vec![content_change]
-                    })?;
+                    )?;
                 }
             }
         }
