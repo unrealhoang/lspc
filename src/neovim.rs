@@ -609,7 +609,7 @@ impl Editor for Neovim {
         let params = to_value(attach_buf_params).map_err(|e| {
             EditorError::Failed(format!("Failed to encode params: {}", e.description()))
         })?;
-        let result = self.request("nvim_buf_attach", params)?;
+        let _result = self.request("nvim_buf_attach", params)?;
 
         Ok(())
     }

@@ -7,9 +7,10 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
-use crossbeam::channel::{Receiver, Select};
+use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
     self as lsp,
     notification::{self as noti},
@@ -201,14 +202,19 @@ pub struct Lspc<E: Editor> {
 enum SelectedMsg<B: BufferId> {
     Editor(Event<B>),
     Lsp(usize, LspMessage),
+    TimerTick,
 }
 
 fn select<E: Editor>(
     event_receiver: &Receiver<Event<E::BufferId>>,
+    timer_tick: &Receiver<Instant>,
     handlers: &Vec<LangServerHandler<E>>,
 ) -> SelectedMsg<E::BufferId> {
     let mut sel = Select::new();
+
     sel.recv(event_receiver);
+    sel.recv(timer_tick);
+
     for lsp_client in handlers.iter() {
         sel.recv(&lsp_client.receiver());
     }
@@ -219,10 +225,11 @@ fn select<E: Editor>(
             let nvim_msg = oper.recv(event_receiver).unwrap();
             SelectedMsg::Editor(nvim_msg)
         }
+        1 => SelectedMsg::TimerTick,
         i => {
-            let lsp_msg = oper.recv(handlers[i - 1].receiver()).unwrap();
+            let lsp_msg = oper.recv(handlers[i - 2].receiver()).unwrap();
 
-            SelectedMsg::Lsp(i - 1, lsp_msg)
+            SelectedMsg::Lsp(i - 2, lsp_msg)
         }
     }
 }
@@ -517,6 +524,10 @@ impl<E: Editor> Lspc<E> {
 
         Ok(())
     }
+
+    fn handle_timer_tick(&mut self) -> Result<(), LspcError> {
+        Ok(())
+    }
 }
 
 impl<E: Editor> Lspc<E> {
@@ -530,12 +541,15 @@ impl<E: Editor> Lspc<E> {
 
     pub fn main_loop(mut self) {
         let event_receiver = self.editor.events();
+        let timer_tick = tick(Duration::from_millis(100));
+
         loop {
-            let selected = select(&event_receiver, &self.lsp_handlers);
+            let selected = select(&event_receiver, &timer_tick, &self.lsp_handlers);
             log::debug!("Received msg: {:?}", selected);
             let result = match selected {
                 SelectedMsg::Editor(event) => self.handle_editor_event(event),
                 SelectedMsg::Lsp(index, msg) => self.handle_lsp_msg(index, msg),
+                SelectedMsg::TimerTick => self.handle_timer_tick(),
             };
             if let Err(e) = result {
                 log::error!("Handle error: {:?}", e);
