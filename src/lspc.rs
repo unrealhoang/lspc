@@ -27,6 +27,9 @@ use self::{
     types::{InlayHint, InlayHints, InlayHintsParams},
 };
 
+pub const SYNC_DELAY_MS: u64 = 500;
+pub const TIMER_TICK_MS: u64 = 100;
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct LsConfig {
     pub command: Vec<String>,
@@ -148,7 +151,7 @@ pub enum LspcError {
     NotStarted,
 }
 
-pub trait BufferId: Eq + std::fmt::Debug + std::hash::Hash + 'static {}
+pub trait BufferId: Eq + std::fmt::Debug + std::hash::Hash + Copy + 'static {}
 
 pub trait Editor: 'static {
     type BufferId: BufferId;
@@ -176,19 +179,83 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
 }
 
+struct DelayedSync {
+    scheduled_at: Option<Instant>,
+    sync_content: lsp::DidChangeTextDocumentParams,
+}
+
+impl DelayedSync {
+    fn new(uri: Url) -> Self {
+        DelayedSync {
+            scheduled_at: None,
+            sync_content: lsp::DidChangeTextDocumentParams {
+                text_document: lsp::VersionedTextDocumentIdentifier {
+                    uri: uri,
+                    version: None,
+                },
+                content_changes: Vec::new(),
+            },
+        }
+    }
+
+    fn update_sync_content(
+        &mut self,
+        version: i64,
+        content_change: lsp::TextDocumentContentChangeEvent,
+    ) {
+        self.sync_content.text_document.version = Some(version);
+        self.sync_content.content_changes.push(content_change);
+    }
+}
+
 struct TrackingBuffer {
     lang_id: String,
     text_document: TextDocumentIdentifier,
     sent_did_open: bool,
+    delayed_sync: DelayedSync,
 }
 
 impl TrackingBuffer {
     fn new(lang_id: String, text_document: TextDocumentIdentifier) -> Self {
         TrackingBuffer {
             lang_id,
+            delayed_sync: DelayedSync::new(text_document.uri.clone()),
             text_document,
             sent_did_open: false,
         }
+    }
+
+    fn sync_pending_changes<E: Editor>(
+        &mut self,
+        lsp_handler: &mut LangServerHandler<E>,
+    ) -> Result<(), LspcError> {
+        let mut sync_content = lsp::DidChangeTextDocumentParams {
+            text_document: lsp::VersionedTextDocumentIdentifier {
+                uri: self.delayed_sync.sync_content.text_document.uri.clone(),
+                version: self.delayed_sync.sync_content.text_document.version,
+            },
+            content_changes: Vec::new(),
+        };
+        std::mem::swap(&mut self.delayed_sync.sync_content, &mut sync_content);
+
+        lsp_handler.lsp_notify::<noti::DidChangeTextDocument>(sync_content)?;
+        self.delayed_sync.scheduled_at = None;
+
+        Ok(())
+    }
+
+    fn delay_sync_in(
+        &mut self,
+        duration: Duration,
+        version: i64,
+        content_change: lsp::TextDocumentContentChangeEvent,
+    ) {
+        if let None = self.delayed_sync.scheduled_at {
+            self.delayed_sync.scheduled_at = Some(Instant::now() + duration);
+        }
+
+        self.delayed_sync
+            .update_sync_content(version, content_change);
     }
 }
 
@@ -225,7 +292,10 @@ fn select<E: Editor>(
             let nvim_msg = oper.recv(event_receiver).unwrap();
             SelectedMsg::Editor(nvim_msg)
         }
-        1 => SelectedMsg::TimerTick,
+        1 => {
+            oper.recv(timer_tick).unwrap();
+            SelectedMsg::TimerTick
+        }
         i => {
             let lsp_msg = oper.recv(handlers[i - 2].receiver()).unwrap();
 
@@ -481,15 +551,11 @@ impl<E: Editor> Lspc<E> {
                     )?;
                     tracking_buf.sent_did_open = true;
                 } else {
-                    handler.lsp_notify::<noti::DidChangeTextDocument>(
-                        lsp::DidChangeTextDocumentParams {
-                            text_document: lsp::VersionedTextDocumentIdentifier {
-                                uri: tracking_buf.text_document.uri.clone(),
-                                version: Some(version),
-                            },
-                            content_changes: vec![content_change],
-                        },
-                    )?;
+                    tracking_buf.delay_sync_in(
+                        Duration::from_millis(SYNC_DELAY_MS),
+                        version,
+                        content_change,
+                    );
                 }
             }
         }
@@ -526,6 +592,32 @@ impl<E: Editor> Lspc<E> {
     }
 
     fn handle_timer_tick(&mut self) -> Result<(), LspcError> {
+        let now = Instant::now();
+        let sync_due_buffers = self
+            .tracking_buffers
+            .iter()
+            .filter(|(_, buf)| {
+                if let Some(instant) = buf.delayed_sync.scheduled_at {
+                    instant <= now
+                } else {
+                    false
+                }
+            })
+            .map(|(buf_id, _)| buf_id)
+            .copied()
+            .collect::<Vec<_>>();
+
+        for buf_id in sync_due_buffers {
+            log::debug!("Buffer changes due: {:?}", buf_id);
+            let (handler, tracking_buf) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                log::info!(
+                    "Received changed event for nontracking buffer: {:?}",
+                    buf_id
+                );
+                MainLoopError::IgnoredMessage
+            })?;
+            tracking_buf.sync_pending_changes(handler)?;
+        }
         Ok(())
     }
 }
@@ -541,11 +633,10 @@ impl<E: Editor> Lspc<E> {
 
     pub fn main_loop(mut self) {
         let event_receiver = self.editor.events();
-        let timer_tick = tick(Duration::from_millis(100));
+        let timer_tick = tick(Duration::from_millis(TIMER_TICK_MS));
 
         loop {
             let selected = select(&event_receiver, &timer_tick, &self.lsp_handlers);
-            log::debug!("Received msg: {:?}", selected);
             let result = match selected {
                 SelectedMsg::Editor(event) => self.handle_editor_event(event),
                 SelectedMsg::Lsp(index, msg) => self.handle_lsp_msg(index, msg),
