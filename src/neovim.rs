@@ -164,6 +164,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
         NvimMessage::RpcNotification { method, params } => {
+            // Command messages
             if method == "hello" {
                 Ok(Event::Hello)
             } else if method == "start_lang_server" {
@@ -261,6 +262,8 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     buf_id,
                     text_document,
                 })
+
+            // Callback messages
             } else if method == "nvim_buf_lines_event" {
                 #[derive(Deserialize)]
                 struct NvimBufLinesEvent(
@@ -271,8 +274,10 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     Vec<String>,                     // linedata
                     #[serde(default)] Option<Value>, // { more }
                 );
-                let buf_line_event: NvimBufLinesEvent = Deserialize::deserialize(params)
-                    .map_err(|_e| EditorError::Parse("failed to parse buf_lines_event params"))?;
+                let buf_line_event: NvimBufLinesEvent =
+                    Deserialize::deserialize(params).map_err(|_e| {
+                        EditorError::Parse("failed to parse nvim_buf_lines_event params")
+                    })?;
 
                 if !(buf_line_event.0).is_buf() {
                     return Err(EditorError::UnexpectedResponse("Expect buffer handler"));
@@ -298,6 +303,23 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     buf_id: buf_handler,
                     version,
                     content_change,
+                })
+            } else if method == "nvim_buf_detach_event" {
+                #[derive(Deserialize)]
+                struct NvimBufDetachEvent((NvimHandle,));
+
+                let buf_detach_event: NvimBufDetachEvent = Deserialize::deserialize(params)
+                    .map_err(|_e| {
+                        EditorError::Parse("failed to parse nvim_buf_detach_event params")
+                    })?;
+
+                if !((buf_detach_event.0).0).is_buf() {
+                    return Err(EditorError::UnexpectedResponse("Expect buffer handler"));
+                }
+                let buf_handler = (buf_detach_event.0).0.unwrap_buf();
+
+                Ok(Event::DidClose {
+                    buf_id: buf_handler,
                 })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(

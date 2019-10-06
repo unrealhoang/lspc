@@ -76,6 +76,9 @@ pub enum Event<B: BufferId> {
         version: i64,
         content_change: lsp::TextDocumentContentChangeEvent,
     },
+    DidClose {
+        buf_id: B,
+    },
 }
 
 #[derive(Debug)]
@@ -247,8 +250,10 @@ impl TrackingBuffer {
         };
         std::mem::swap(&mut self.delayed_sync.sync_content, &mut sync_content);
 
-        lsp_handler.lsp_notify::<noti::DidChangeTextDocument>(sync_content)?;
-        self.delayed_sync.scheduled_at = None;
+        if !sync_content.content_changes.is_empty() {
+            lsp_handler.lsp_notify::<noti::DidChangeTextDocument>(sync_content)?;
+            self.delayed_sync.scheduled_at = None;
+        }
 
         Ok(())
     }
@@ -566,6 +571,23 @@ impl<E: Editor> Lspc<E> {
                         content_change,
                     );
                 }
+            }
+            Event::DidClose { buf_id } => {
+                let (handler, tracking_buf) =
+                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                        log::info!(
+                            "Received changed event for nontracking buffer: {:?}",
+                            buf_id
+                        );
+                        MainLoopError::IgnoredMessage
+                    })?;
+
+                tracking_buf.sync_pending_changes(handler)?;
+                handler.lsp_notify::<noti::DidCloseTextDocument>(
+                    lsp::DidCloseTextDocumentParams {
+                        text_document: tracking_buf.text_document.clone(),
+                    },
+                )?;
             }
         }
 
