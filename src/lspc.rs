@@ -204,7 +204,16 @@ impl DelayedSync {
         content_change: lsp::TextDocumentContentChangeEvent,
     ) {
         self.sync_content.text_document.version = Some(version);
-        self.sync_content.content_changes.push(content_change);
+        let last_content_change = self.sync_content.content_changes.iter_mut().last();
+        if let Some(last_content_change) = last_content_change {
+            if last_content_change.range == content_change.range {
+                std::mem::replace(last_content_change, content_change);
+            } else {
+                self.sync_content.content_changes.push(content_change);
+            }
+        } else {
+            self.sync_content.content_changes.push(content_change);
+        }
     }
 }
 
