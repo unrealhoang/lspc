@@ -2,8 +2,6 @@ function! lspc#config()
 
 endfunction
 
-let s:root = expand('<sfile>:p:h:h')
-
 function! lspc#output(log)
   " if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
   "   let s:output_buffer = nvim_create_buf(v:true, v:false)
@@ -18,29 +16,35 @@ function! lspc#output(log)
 endfunction
 
 function! s:echo_handler(job_id, data, name)
-  let l:log = ["[LSPC][" . a:name ."]. Data: " . string(a:data)]
+  let l:log = "[LSPC][" . a:name ."]. Data: " . string(a:data)
   call lspc#output(l:log)
 endfunction
 
 function! lspc#init()
+  if lspc#started()
+    return
+  endif
+
   let l:binpath = s:root . '/target/debug/neovim_lspc'
 
+  call setenv('RUST_BACKTRACE', '1')
   let s:job_id = jobstart([l:binpath], {
         \ 'rpc': v:true,
         \ 'on_stderr': function('s:echo_handler'),
         \ 'on_exit':   function('s:echo_handler'),
         \ })
   if s:job_id == -1
-    echo "[LSPC] Cannot execute " . l:binpath
+    echom "[LSPC] Cannot execute " . l:binpath
   endif
+endfunction
+
+function! lspc#started() abort
+  return exists('s:job_id')
 endfunction
 
 function! lspc#destroy()
   call jobstop(s:job_id)
-endfunction
-
-function! lspc#current_file_type()
-
+  unlet! s:job_id
 endfunction
 
 function! lspc#start_lang_server()
@@ -55,6 +59,13 @@ function! lspc#hover()
   let l:cur_path = lspc#buffer#filename()
   let l:position = lspc#buffer#position()
   call rpcnotify(s:job_id, 'hover', l:lang_id, l:cur_path, l:position)
+endfunction
+
+function! lspc#did_open()
+  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
+  let l:cur_path = lspc#buffer#filename()
+  call rpcnotify(s:job_id, 'did_open', buf_id, l:cur_path)
 endfunction
 
 function! lspc#goto_definition()
@@ -84,3 +95,9 @@ endfunction
 function! lspc#debug()
   echo "Output Buffer: " . s:output_buffer
 endfunction
+
+let s:root = expand('<sfile>:p:h:h')
+
+if !exists('s:job_id')
+  call lspc#init()
+endif

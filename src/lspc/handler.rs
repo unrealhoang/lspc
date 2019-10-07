@@ -1,12 +1,15 @@
 use std::{
     fmt::Debug,
+    path::Path,
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crossbeam::channel::Receiver;
 use lsp_types::{
-    notification::Initialized, request::Request, InitializeResult, ServerCapabilities,
+    notification::{Initialized, Notification},
+    request::Request,
+    InitializeResult, ServerCapabilities,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -34,6 +37,7 @@ pub struct LangServerHandler<E: Editor> {
     rpc_client: rpc::Client<LspMessage>,
     callbacks: Vec<Callback<E>>,
     next_id: AtomicU64,
+    root_path: String,
     // None if server is not started
     server_capabilities: Option<ServerCapabilities>,
     pub lang_settings: LangSettings,
@@ -45,6 +49,7 @@ impl<E: Editor> LangServerHandler<E> {
         command: &String,
         lang_settings: LangSettings,
         args: &[String],
+        root_path: String,
     ) -> Result<Self, LangServerError> {
         let child_process = Command::new(command)
             .args(args)
@@ -63,10 +68,17 @@ impl<E: Editor> LangServerHandler<E> {
             rpc_client,
             lang_id,
             next_id: AtomicU64::new(1),
+            root_path,
             callbacks: Vec::new(),
             server_capabilities: None,
             lang_settings,
         })
+    }
+
+    pub fn include_file(&self, file_path: &str) -> bool {
+        let file_path = Path::new(file_path);
+
+        file_path.starts_with(&self.root_path)
     }
 
     fn send_msg(&self, msg: LspMessage) -> Result<(), LangServerError> {
@@ -110,10 +122,8 @@ impl<E: Editor> LangServerHandler<E> {
 
     pub fn initialized(&mut self) -> Result<(), LangServerError> {
         log::debug!("Sending initialized notification");
-        let initialized_params = lsp_types::InitializedParams {};
-        let initialized_notification = RawNotification::new::<Initialized>(&initialized_params);
 
-        self.notify(initialized_notification)
+        self.lsp_notify::<Initialized>(lsp_types::InitializedParams {})
     }
 
     pub fn lsp_request<R: Request>(
@@ -145,7 +155,11 @@ impl<E: Editor> LangServerHandler<E> {
         self.send_msg(LspMessage::Request(request))
     }
 
-    fn notify(&mut self, not: RawNotification) -> Result<(), LangServerError> {
-        self.send_msg(LspMessage::Notification(not))
+    pub fn lsp_notify<R: Notification>(&mut self, params: R::Params) -> Result<(), LangServerError>
+    where
+        R::Params: Serialize + Debug,
+    {
+        let noti = RawNotification::new::<R>(&params);
+        self.send_msg(LspMessage::Notification(noti))
     }
 }
