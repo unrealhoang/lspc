@@ -76,6 +76,7 @@ pub enum Event<B: BufferId> {
         position: Position,
         trigger_kind: CompletionTriggerKind,
         trigger_character: Option<String>,
+    },
     DidOpen {
         buf_id: B,
         text_document: TextDocumentIdentifier,

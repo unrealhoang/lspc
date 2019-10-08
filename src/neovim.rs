@@ -673,7 +673,7 @@ impl Editor for Neovim {
         }
         self.call_function(
             "complete",
-            vec![column.into(), Value::Array(vim_complete_items)],
+            Value::Array(vec![column.into(), Value::Array(vim_complete_items)]),
         )?;
         Ok(())
     }
