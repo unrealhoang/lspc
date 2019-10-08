@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     error::Error,
     fmt,
     io::{BufRead, Write},
@@ -10,9 +11,9 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    CompletionItem, CompletionTriggerKind, GotoCapability, Hover, HoverCapability, HoverContents,
-    Location, MarkedString, MarkupContent, MarkupKind, Position, ShowMessageParams,
-    TextDocumentClientCapabilities, TextDocumentIdentifier, TextEdit,
+    self as lsp, CompletionItem, CompletionTriggerKind, GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString,
+    MarkupContent, MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
+    TextDocumentIdentifier, TextEdit,
 };
 use rmpv::{
     decode::read_value,
@@ -28,12 +29,12 @@ use serde::{
 };
 use url::Url;
 
-use crate::lspc::{types::InlayHint, Editor, EditorError, Event, LsConfig};
+use crate::lspc::{types::InlayHint, BufferId, Editor, EditorError, Event, LsConfig};
 use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
     rpc_client: rpc::Client<NvimMessage>,
-    event_receiver: Receiver<Event>,
+    event_receiver: Receiver<Event<BufferHandler>>,
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
@@ -159,20 +160,19 @@ where
     Ok(TextDocumentIdentifier::new(uri))
 }
 
-fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
+fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
         NvimMessage::RpcNotification { method, params } => {
+            // Command messages
             if method == "hello" {
                 Ok(Event::Hello)
             } else if method == "start_lang_server" {
                 #[derive(Deserialize)]
                 struct StartLangServerParams(String, LsConfig, String);
 
-                let start_lang_params: StartLangServerParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse start lang server params")
-                    })?;
+                let start_lang_params: StartLangServerParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse start lang server params"))?;
 
                 Ok(Event::StartServer {
                     lang_id: start_lang_params.0,
@@ -188,7 +188,7 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Position,
                 );
 
-                let hover_params: HoverParams = Deserialize::deserialize(Value::from(params))
+                let hover_params: HoverParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
                 Ok(Event::Hover {
@@ -205,10 +205,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Position,
                 );
 
-                let goto_definition_params: GotoDefinitionParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse goto definition params")
-                    })?;
+                let goto_definition_params: GotoDefinitionParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 Ok(Event::GotoDefinition {
                     lang_id: goto_definition_params.0,
@@ -223,9 +221,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     TextDocumentIdentifier,
                 );
 
-                let inlay_hints_params: InlayHintsParams =
-                    Deserialize::deserialize(Value::from(params))
-                        .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
+                let inlay_hints_params: InlayHintsParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
                 Ok(Event::InlayHints {
                     lang_id: inlay_hints_params.0,
@@ -240,10 +237,8 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     Vec<String>,
                 );
 
-                let format_doc_params: FormatDocParams =
-                    Deserialize::deserialize(Value::from(params)).map_err(|_e| {
-                        EditorError::Parse("failed to parse goto definition params")
-                    })?;
+                let format_doc_params: FormatDocParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 Ok(Event::FormatDoc {
                     lang_id: format_doc_params.0,
@@ -272,6 +267,82 @@ fn to_event(msg: NvimMessage) -> Result<Event, EditorError> {
                     trigger_kind: completion_params.3,
                     trigger_character: completion_params.4,
                 })
+            } else if method == "did_open" {
+                #[derive(Deserialize)]
+                struct DidOpenParams(
+                    i64,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                );
+                let did_open_params: DidOpenParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse did_open params"))?;
+
+                let text_document = did_open_params.1;
+                let buf_id = BufferHandler(did_open_params.0);
+
+                Ok(Event::DidOpen {
+                    buf_id,
+                    text_document,
+                })
+
+            // Callback messages
+            } else if method == "nvim_buf_lines_event" {
+                #[derive(Deserialize)]
+                struct NvimBufLinesEvent(
+                    NvimHandle,                      // bufnr
+                    Option<i64>,                     // changedtick
+                    i64,                             // firstline
+                    i64,                             // lastline
+                    Vec<String>,                     // linedata
+                    #[serde(default)] Option<Value>, // { more }
+                );
+                let buf_line_event: NvimBufLinesEvent =
+                    Deserialize::deserialize(params).map_err(|_e| {
+                        EditorError::Parse("failed to parse nvim_buf_lines_event params")
+                    })?;
+
+                if !(buf_line_event.0).is_buf() {
+                    return Err(EditorError::UnexpectedResponse("Expect buffer handler"));
+                }
+                if buf_line_event.1.is_none() {
+                    return Err(EditorError::UnexpectedResponse(
+                        "Not support null changedtick",
+                    ));
+                }
+
+                let buf_handler = buf_line_event.0.unwrap_buf();
+                let version = buf_line_event.1.unwrap();
+                let content_change = lsp::TextDocumentContentChangeEvent {
+                    range: Some(lsp::Range {
+                        start: lsp::Position::new(buf_line_event.2 as u64, 0),
+                        end: lsp::Position::new(buf_line_event.3 as u64, 0),
+                    }),
+                    range_length: None,
+                    text: buf_line_event.4.join("\n"),
+                };
+
+                Ok(Event::DidChange {
+                    buf_id: buf_handler,
+                    version,
+                    content_change,
+                })
+            } else if method == "nvim_buf_detach_event" {
+                #[derive(Deserialize)]
+                struct NvimBufDetachEvent((NvimHandle,));
+
+                let buf_detach_event: NvimBufDetachEvent = Deserialize::deserialize(params)
+                    .map_err(|_e| {
+                        EditorError::Parse("failed to parse nvim_buf_detach_event params")
+                    })?;
+
+                if !((buf_detach_event.0).0).is_buf() {
+                    return Err(EditorError::UnexpectedResponse("Expect buffer handler"));
+                }
+                let buf_handler = (buf_detach_event.0).0.unwrap_buf();
+
+                Ok(Event::DidClose {
+                    buf_id: buf_handler,
+                })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
                     "unexpected notification {:?} {:?}",
@@ -294,6 +365,7 @@ impl Neovim {
             let mut subscriptions = Vec::<(u64, Sender<NvimMessage>)>::new();
 
             for nvim_msg in rpc_receiver {
+                log::debug!("< Neovim: {:?}", nvim_msg);
                 if let NvimMessage::RpcResponse { msgid, .. } = nvim_msg {
                     while let Ok(sub) = subscription_receiver.try_recv() {
                         subscriptions.push(sub);
@@ -322,12 +394,40 @@ impl Neovim {
         }
     }
 
-    pub fn request(&self, method: &str, params: Vec<Value>) -> Result<NvimMessage, EditorError> {
+    // using nvim_call_atomic rpc call
+    #[allow(dead_code)]
+    fn call_atomic(&self, calls: Value) -> Result<Vec<Value>, EditorError> {
+        let response = self.request("nvim_call_atomic", calls);
+        log::debug!("Response: {:?}", response);
+        if let NvimMessage::RpcResponse { result, error, .. } = response? {
+            if let Some(error) = error.as_array() {
+                let error_msg = error
+                    .get(1)
+                    .ok_or(EditorError::UnexpectedResponse("Expected error message"))?
+                    .as_str()
+                    .ok_or(EditorError::UnexpectedResponse(
+                        "Expected String error message",
+                    ))?;
+
+                return Err(EditorError::Failed(error_msg.into()));
+            }
+
+            if let Value::Array(results) = result {
+                Ok(results)
+            } else {
+                Err(EditorError::UnexpectedResponse("Expect result array"))
+            }
+        } else {
+            Err(EditorError::UnexpectedResponse("Expected response"))
+        }
+    }
+
+    pub fn request(&self, method: &str, params: Value) -> Result<NvimMessage, EditorError> {
         let msgid = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = NvimMessage::RpcRequest {
             msgid,
             method: method.into(),
-            params: Value::from(params),
+            params: params,
         };
 
         let (response_sender, response_receiver) = channel::bounded::<NvimMessage>(1);
@@ -341,10 +441,10 @@ impl Neovim {
             .map_err(|_| EditorError::Timeout)
     }
 
-    pub fn notify(&self, method: &str, params: Vec<Value>) -> Result<(), EditorError> {
+    pub fn notify(&self, method: &str, params: &[Value]) -> Result<(), EditorError> {
         let noti = NvimMessage::RpcNotification {
             method: method.into(),
-            params: Value::from(params),
+            params: Value::from(params.to_owned()),
         };
         // FIXME: add RpcQueueFull to EditorError??
         self.rpc_client.sender.send(noti).unwrap();
@@ -353,23 +453,28 @@ impl Neovim {
     }
 
     pub fn command(&self, command: &str) -> Result<NvimMessage, EditorError> {
-        self.request("nvim_command", vec![command.into()])
+        let params = vec![Value::from(command)].into();
+        self.request("nvim_command", params)
     }
 
     // Call VimL function
-    pub fn call_function(&self, func: &str, args: Vec<Value>) -> Result<NvimMessage, EditorError> {
-        self.request("nvim_call_function", vec![func.into(), args.into()])
+    pub fn call_function(&self, func: &str, args: Value) -> Result<NvimMessage, EditorError> {
+        let params = vec![func.into(), args].into();
+        self.request("nvim_call_function", params)
     }
 
     pub fn create_namespace(&self, ns_name: &str) -> Result<u64, EditorError> {
-        let response = self.request("nvim_create_namespace", vec![ns_name.into()])?;
+        let params = vec![Value::from(ns_name)].into();
+        let response = self.request("nvim_create_namespace", params)?;
         log::debug!("Create namespace response: {:?}", response);
         if let NvimMessage::RpcResponse { ref result, .. } = response {
-            Ok(result
-                .as_u64()
-                .ok_or(EditorError::UnexpectedResponse(format!("{:?}", response)))?)
+            Ok(result.as_u64().ok_or(EditorError::UnexpectedResponse(
+                "Expected nvim_create_namespace respsonse",
+            ))?)
         } else {
-            Err(EditorError::UnexpectedResponse(format!("{:?}", response)))
+            Err(EditorError::UnexpectedResponse(
+                "Expected nvim_create_namespace respsonse",
+            ))
         }
     }
 
@@ -387,7 +492,7 @@ impl Neovim {
             .into();
         self.notify(
             "nvim_buf_set_virtual_text",
-            vec![
+            &vec![
                 buffer_id.into(),
                 ns_id.into(),
                 line.into(),
@@ -408,8 +513,12 @@ impl Neovim {
     }
 }
 
+impl BufferId for BufferHandler {}
+
 impl Editor for Neovim {
-    fn events(&self) -> Receiver<Event> {
+    type BufferId = BufferHandler;
+
+    fn events(&self) -> Receiver<Event<BufferHandler>> {
         self.event_receiver.clone()
     }
 
@@ -433,20 +542,20 @@ impl Editor for Neovim {
     }
 
     fn say_hello(&self) -> Result<(), EditorError> {
-        let params = vec!["echo 'hello from the other side'".into()];
+        let params = vec![Value::from("echo 'hello from the other side'")].into();
         self.request("nvim_command", params)
             .map_err(|_| EditorError::Timeout)?;
 
         Ok(())
     }
 
-    fn message(&self, msg: &str) -> Result<(), EditorError> {
+    fn message(&mut self, msg: &str) -> Result<(), EditorError> {
         self.command(&format!("echo '{}'", msg))?;
         Ok(())
     }
 
     fn show_hover(
-        &self,
+        &mut self,
         _text_document: &TextDocumentIdentifier,
         hover: &Hover,
     ) -> Result<(), EditorError> {
@@ -465,14 +574,14 @@ impl Editor for Neovim {
             .into();
         self.call_function(
             "lspc#command#open_hover_preview",
-            vec![bufname.into(), lines, filetype],
+            vec![bufname.into(), lines, filetype].into(),
         )?;
 
         Ok(())
     }
 
     fn inline_hints(
-        &self,
+        &mut self,
         text_document: &TextDocumentIdentifier,
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError> {
@@ -490,13 +599,13 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn show_message(&self, params: &ShowMessageParams) -> Result<(), EditorError> {
+    fn show_message(&mut self, params: &ShowMessageParams) -> Result<(), EditorError> {
         self.command(&format!("echo '[LS-{:?}] {}'", params.typ, params.message))?;
 
         Ok(())
     }
 
-    fn goto(&self, location: &Location) -> Result<(), EditorError> {
+    fn goto(&mut self, location: &Location) -> Result<(), EditorError> {
         let filepath = location
             .uri
             .to_file_path()
@@ -507,7 +616,8 @@ impl Editor for Neovim {
         self.command(&format!("edit {}", filepath))?;
         let line = location.range.start.line + 1;
         let col = location.range.start.character + 1;
-        self.call_function("cursor", vec![line.into(), col.into()])?;
+        let params = Value::Array(vec![line.into(), col.into()]);
+        self.call_function("cursor", params)?;
 
         Ok(())
     }
@@ -520,16 +630,31 @@ impl Editor for Neovim {
         } else {
             lines.len() - 1
         };
-        self.call_function(
-            "nvim_buf_set_lines",
-            vec![
-                0.into(), // 0 for current buff
-                0.into(),
-                end_line.into(),
-                false.into(),
-                Value::Array(new_lines),
-            ],
-        )?;
+        let params = Value::Array(vec![
+            0.into(), // 0 for current buff
+            0.into(),
+            end_line.into(),
+            false.into(),
+            Value::Array(new_lines),
+        ]);
+        self.call_function("nvim_buf_set_lines", params)?;
+        Ok(())
+    }
+
+    fn watch_file_events(
+        &mut self,
+        _text_document: &TextDocumentIdentifier,
+    ) -> Result<(), EditorError> {
+        // FIXME: check current buffer is `text_document`
+        #[derive(Serialize)]
+        struct AttachBufParams(i64, bool, HashMap<(), ()>);
+
+        let attach_buf_params = AttachBufParams(0, true, HashMap::new());
+        let params = to_value(attach_buf_params).map_err(|e| {
+            EditorError::Failed(format!("Failed to encode params: {}", e.description()))
+        })?;
+        let _result = self.request("nvim_buf_attach", params)?;
+
         Ok(())
     }
 
@@ -581,6 +706,131 @@ impl Message for NvimMessage {
             NvimMessage::RpcNotification { method, .. } => method == "exit",
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct BufferHandler(i64);
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct WindowHandler(i64);
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct TabpageHandler(i64);
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum NvimHandle {
+    Buffer(BufferHandler),
+    Window(WindowHandler),
+    Tabpage(TabpageHandler),
+}
+
+impl NvimHandle {
+    pub fn is_buf(&self) -> bool {
+        match self {
+            NvimHandle::Buffer(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_win(&self) -> bool {
+        match self {
+            NvimHandle::Window(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_tab(&self) -> bool {
+        match self {
+            NvimHandle::Tabpage(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn unwrap_buf(self) -> BufferHandler {
+        match self {
+            NvimHandle::Buffer(buf) => buf,
+            _ => panic!("unwrap_buf on non buf"),
+        }
+    }
+
+    pub fn unwrap_win(self) -> WindowHandler {
+        match self {
+            NvimHandle::Window(win) => win,
+            _ => panic!("unwrap_win on non win"),
+        }
+    }
+
+    pub fn unwrap_tab(self) -> TabpageHandler {
+        match self {
+            NvimHandle::Tabpage(tab) => tab,
+            _ => panic!("unwrap_tab on non tab"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NvimHandle {
+    fn deserialize<D>(deserializer: D) -> Result<NvimHandle, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NvimHandleVisitor;
+        impl<'de> Visitor<'de> for NvimHandleVisitor {
+            type Value = NvimHandle;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("_ExtStruct((i8, &[u8]))")
+            }
+
+            fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let (tag, bytes): (i8, serde_bytes::ByteBuf) =
+                    Deserialize::deserialize(deserializer)?;
+
+                let handle: i64 = match bytes.len() {
+                    1 => bytes[0] as i8 as i64,
+                    2 => {
+                        let mut b: [u8; 2] = [0; 2];
+                        b.copy_from_slice(&bytes[..]);
+                        i16::from_le_bytes(b) as i64
+                    }
+                    4 => {
+                        let mut b: [u8; 4] = [0; 4];
+                        b.copy_from_slice(&bytes[..]);
+                        i32::from_le_bytes(b) as i64
+                    }
+                    8 => {
+                        let mut b: [u8; 8] = [0; 8];
+                        b.copy_from_slice(&bytes[..]);
+                        i64::from_le_bytes(b)
+                    }
+                    _ => return Err(<D::Error as de::Error>::custom("invalid bytes length")),
+                };
+
+                match tag {
+                    0 => Ok(NvimHandle::Buffer(BufferHandler(handle))),
+                    1 => Ok(NvimHandle::Window(WindowHandler(handle))),
+                    2 => Ok(NvimHandle::Tabpage(TabpageHandler(handle))),
+                    _ => Err(<D::Error as de::Error>::custom("unknown tag")),
+                }
+            }
+        }
+
+        deserializer.deserialize_newtype_struct(rmpv::MSGPACK_EXT_STRUCT_NAME, NvimHandleVisitor)
+    }
+}
+
+impl Serialize for NvimHandle {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let ext_data = match self {
+            NvimHandle::Buffer(BufferHandler(buf_id)) => (0, buf_id.to_le_bytes()),
+            NvimHandle::Window(WindowHandler(win_id)) => (1, win_id.to_le_bytes()),
+            NvimHandle::Tabpage(TabpageHandler(tab_id)) => (2, tab_id.to_le_bytes()),
+        };
+
+        serializer.serialize_newtype_struct(rmpv::MSGPACK_EXT_STRUCT_NAME, &ext_data)
     }
 }
 
@@ -827,5 +1077,13 @@ mod tests {
         };
 
         assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+    }
+
+    #[test]
+    fn test_deserialize_buffer_handler() {
+        let v = Value::Ext(0, vec![13]);
+        let handle: NvimHandle = Deserialize::deserialize(v).unwrap();
+
+        assert_eq!(NvimHandle::Buffer(BufferHandler(13)), handle);
     }
 }

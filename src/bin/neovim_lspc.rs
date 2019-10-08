@@ -21,7 +21,7 @@ pub fn stdoutlock() -> StdoutLock<'static> {
 }
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    simple_logging::log_to_file("log.txt", log::LevelFilter::Debug);
+    simple_logging::log_to_file("log.txt", log::LevelFilter::Debug).expect("Can not open log file");
 
     let nvim_rpc = Client::<NvimMessage>::new(stdinlock, stdoutlock);
     let neovim = Neovim::new(nvim_rpc);
