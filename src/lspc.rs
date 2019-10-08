@@ -2,7 +2,6 @@ pub mod handler;
 // Custom LSP types
 pub mod msg;
 pub mod types;
-
 use std::{
     collections::HashMap,
     io,
