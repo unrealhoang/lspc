@@ -1022,6 +1022,7 @@ mod tests {
         Some(TextDocumentIdentifier::new(uri))
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_deserialize_inlay_hints_params() {
         let inlay_hints_msg = NvimMessage::RpcNotification {
@@ -1029,6 +1030,22 @@ mod tests {
             params: Value::from(vec![Value::from("rust"), Value::from("/abc/d.rs")]),
         };
         let text_document = to_text_document("/abc/d.rs").unwrap();
+        let expected = Event::InlayHints {
+            lang_id: String::from("rust"),
+            text_document,
+        };
+
+        assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_deserialize_inlay_hints_params() {
+        let inlay_hints_msg = NvimMessage::RpcNotification {
+            method: String::from("inlay_hints"),
+            params: Value::from(vec![Value::from("rust"), Value::from(r#"C:\\abc\d.rs"#)]),
+        };
+        let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
         let expected = Event::InlayHints {
             lang_id: String::from("rust"),
             text_document,
