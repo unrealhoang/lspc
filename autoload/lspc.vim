@@ -88,6 +88,13 @@ function! lspc#format_doc()
   call rpcnotify(s:job_id, 'format_doc', l:lang_id, l:cur_path, l:lines)
 endfunction
 
+function! lspc#completion()
+  let l:lang_id = 'rust'
+  let l:cur_path = lspc#buffer#filename()
+  let l:position = lspc#buffer#position()
+  call rpcnotify(s:job_id, 'completion', l:lang_id, l:cur_path, l:position, 1)
+endfunction
+
 function! lspc#hello_from_the_other_side()
   call rpcnotify(s:job_id, 'hello')
 endfunction

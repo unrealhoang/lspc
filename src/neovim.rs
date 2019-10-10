@@ -11,7 +11,7 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
-    self as lsp, GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString,
+    self as lsp, CompletionItem, CompletionTriggerKind, GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString,
     MarkupContent, MarkupKind, Position, ShowMessageParams, TextDocumentClientCapabilities,
     TextDocumentIdentifier, TextEdit,
 };
@@ -244,6 +244,28 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     lang_id: format_doc_params.0,
                     text_document: format_doc_params.1,
                     text_document_lines: format_doc_params.2,
+                })
+            } else if method == "completion" {
+                #[derive(Deserialize)]
+                struct CompletionParams(
+                    String,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                    CompletionTriggerKind,
+                    #[serde(default)] Option<String>,
+                );
+
+                let completion_params: CompletionParams =
+                    Deserialize::deserialize(Value::from(params))
+                        .map_err(|_e| EditorError::Parse("failed to parse completion params"))?;
+
+                Ok(Event::RequestCompletion {
+                    lang_id: completion_params.0,
+                    text_document: completion_params.1,
+                    position: completion_params.2,
+                    trigger_kind: completion_params.3,
+                    trigger_character: completion_params.4,
                 })
             } else if method == "did_open" {
                 #[derive(Deserialize)]
@@ -633,6 +655,26 @@ impl Editor for Neovim {
         })?;
         let _result = self.request("nvim_buf_attach", params)?;
 
+        Ok(())
+    }
+
+    fn show_completions(
+        &self,
+        column: u64,
+        completion_items: &Vec<CompletionItem>,
+    ) -> Result<(), EditorError> {
+        let mut vim_complete_items = vec![];
+        for item in completion_items {
+            vim_complete_items.push(Value::Map(vec![
+                ("icase".into(), 1.into()),
+                ("word".into(), item.label.clone().into()),
+                ("abbr".into(), item.label.clone().into()),
+            ]));
+        }
+        self.call_function(
+            "complete",
+            Value::Array(vec![column.into(), Value::Array(vim_complete_items)]),
+        )?;
         Ok(())
     }
 }

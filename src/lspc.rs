@@ -2,7 +2,6 @@ pub mod handler;
 // Custom LSP types
 pub mod msg;
 pub mod types;
-
 use std::{
     collections::HashMap,
     io,
@@ -12,11 +11,15 @@ use std::{
 
 use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
+    notification::ShowMessage,
+    request::{
+        Completion, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize,
+    },
+    CompletionContext, CompletionItem, CompletionParams, CompletionResponse, CompletionTriggerKind,
     self as lsp,
     notification::{self as noti},
-    request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
-    TextDocumentIdentifier, TextEdit,
+    TextDocumentIdentifier, TextDocumentPositionParams, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -66,6 +69,13 @@ pub enum Event<B: BufferId> {
         lang_id: String,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
+    },
+    RequestCompletion {
+        lang_id: String,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+        trigger_kind: CompletionTriggerKind,
+        trigger_character: Option<String>,
     },
     DidOpen {
         buf_id: B,
@@ -176,6 +186,11 @@ pub trait Editor: 'static {
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn show_completions(
+        &self,
+        column: u64,
+        completion_items: &Vec<CompletionItem>,
+    ) -> Result<(), EditorError>;
     fn watch_file_events(
         &mut self,
         text_document: &TextDocumentIdentifier,
@@ -516,6 +531,44 @@ impl<E: Editor> Lspc<E> {
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(edits) = response {
                             editor.apply_edits(&text_document_lines, &edits)?;
+                        }
+
+                        Ok(())
+                    }),
+                )?;
+            }
+            Event::RequestCompletion {
+                lang_id,
+                text_document,
+                position,
+                trigger_kind,
+                trigger_character,
+            } => {
+                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let text_document_position = TextDocumentPositionParams {
+                    text_document,
+                    position,
+                };
+                let context = Some(CompletionContext {
+                    trigger_kind,
+                    trigger_character,
+                });
+                let params = CompletionParams {
+                    text_document_position,
+                    context,
+                };
+                handler.lsp_request::<Completion>(
+                    params,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(completion_list) = response {
+                            match completion_list {
+                                CompletionResponse::Array(items) => {
+                                    editor.show_completions(position.character, &items)?;
+                                }
+                                CompletionResponse::List(list) => {
+                                    editor.show_completions(position.character, &list.items)?;
+                                }
+                            }
                         }
 
                         Ok(())
