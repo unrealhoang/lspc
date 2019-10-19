@@ -63,7 +63,7 @@ pub enum Event<B: BufferId> {
         text_document: TextDocumentIdentifier,
     },
     FormatDoc {
-        lang_id: String,
+        buf_id: B,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     },
@@ -352,12 +352,6 @@ where
 }
 
 impl<E: Editor> Lspc<E> {
-    fn handler_for(&mut self, lang_id: &str) -> Option<&mut LangServerHandler<E>> {
-        self.lsp_handlers
-            .iter_mut()
-            .find(|handler| handler.lang_id == lang_id)
-    }
-
     fn handler_for_buffer(
         &mut self,
         buf_id: &E::BufferId,
@@ -517,11 +511,18 @@ impl<E: Editor> Lspc<E> {
                 )?;
             }
             Event::FormatDoc {
-                lang_id,
+                buf_id,
                 text_document_lines,
                 text_document,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) =
+                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                        log::info!(
+                            "Nontracking buffer: {:?}",
+                            buf_id
+                        );
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let options = FormattingOptions {
                     tab_size: handler.lang_settings.indentation,
                     insert_spaces: handler.lang_settings.indentation_with_space,

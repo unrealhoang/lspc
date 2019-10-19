@@ -234,7 +234,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
             } else if method == "format_doc" {
                 #[derive(Deserialize)]
                 struct FormatDocParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Vec<String>,
@@ -243,8 +243,9 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let format_doc_params: FormatDocParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
+                let buf_id = BufferHandler(format_doc_params.0);
                 Ok(Event::FormatDoc {
-                    lang_id: format_doc_params.0,
+                    buf_id,
                     text_document: format_doc_params.1,
                     text_document_lines: format_doc_params.2,
                 })

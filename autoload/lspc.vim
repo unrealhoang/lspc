@@ -81,10 +81,10 @@ function! lspc#inlay_hints()
 endfunction
 
 function! lspc#format_doc()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
   let l:lines = lspc#buffer#text()
-  call rpcnotify(s:job_id, 'format_doc', l:lang_id, l:cur_path, l:lines)
+  call rpcnotify(s:job_id, 'format_doc', l:buf_id, l:cur_path, l:lines)
 endfunction
 
 function! lspc#hello_from_the_other_side()
