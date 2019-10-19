@@ -12,8 +12,7 @@ use std::{
 
 use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
-    self as lsp,
-    notification::{self as noti},
+    self as lsp, notification as noti,
     request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
@@ -424,14 +423,10 @@ impl<E: Editor> Lspc<E> {
                 text_document,
                 position,
             } => {
-                let (handler, _) =
-                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
-                        log::info!(
-                            "Nontracking buffer: {:?}",
-                            buf_id
-                        );
-                        MainLoopError::IgnoredMessage
-                    })?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let text_document_clone = text_document.clone();
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
@@ -452,14 +447,10 @@ impl<E: Editor> Lspc<E> {
                 text_document,
                 position,
             } => {
-                let (handler, _) =
-                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
-                        log::info!(
-                            "Nontracking buffer: {:?}",
-                            buf_id
-                        );
-                        MainLoopError::IgnoredMessage
-                    })?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
                     position,
@@ -491,14 +482,10 @@ impl<E: Editor> Lspc<E> {
                 buf_id,
                 text_document,
             } => {
-                let (handler, _) =
-                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
-                        log::info!(
-                            "Nontracking buffer: {:?}",
-                            buf_id
-                        );
-                        MainLoopError::IgnoredMessage
-                    })?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let text_document_clone = text_document.clone();
                 let params = InlayHintsParams { text_document };
                 handler.lsp_request::<InlayHints>(
@@ -515,14 +502,10 @@ impl<E: Editor> Lspc<E> {
                 text_document_lines,
                 text_document,
             } => {
-                let (handler, _) =
-                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
-                        log::info!(
-                            "Nontracking buffer: {:?}",
-                            buf_id
-                        );
-                        MainLoopError::IgnoredMessage
-                    })?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let options = FormattingOptions {
                     tab_size: handler.lang_settings.indentation,
                     insert_spaces: handler.lang_settings.indentation_with_space,

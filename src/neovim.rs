@@ -187,7 +187,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     TextDocumentIdentifier,
                     Position,
                 );
-                
+
                 let hover_params: HoverParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
