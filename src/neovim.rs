@@ -200,7 +200,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
             } else if method == "goto_definition" {
                 #[derive(Deserialize)]
                 struct GotoDefinitionParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Position,
@@ -209,8 +209,9 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let goto_definition_params: GotoDefinitionParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
+                let buf_id = BufferHandler(goto_definition_params.0);
                 Ok(Event::GotoDefinition {
-                    lang_id: goto_definition_params.0,
+                    buf_id,
                     text_document: goto_definition_params.1,
                     position: goto_definition_params.2,
                 })
