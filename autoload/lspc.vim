@@ -55,17 +55,16 @@ function! lspc#start_lang_server()
 endfunction
 
 function! lspc#hover()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
   let l:position = lspc#buffer#position()
-  call rpcnotify(s:job_id, 'hover', l:lang_id, l:cur_path, l:position)
+  call rpcnotify(s:job_id, 'hover', l:buf_id, l:cur_path, l:position)
 endfunction
 
 function! lspc#did_open()
-  let l:lang_id = 'rust'
   let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'did_open', buf_id, l:cur_path)
+  call rpcnotify(s:job_id, 'did_open', l:buf_id, l:cur_path)
 endfunction
 
 function! lspc#goto_definition()

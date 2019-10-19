@@ -49,7 +49,7 @@ pub enum Event<B: BufferId> {
         cur_path: String,
     },
     Hover {
-        lang_id: String,
+        buf_id: B,
         text_document: TextDocumentIdentifier,
         position: Position,
     },
@@ -426,11 +426,18 @@ impl<E: Editor> Lspc<E> {
                 self.lsp_handlers.push(lsp_handler);
             }
             Event::Hover {
-                lang_id,
+                buf_id,
                 text_document,
                 position,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) =
+                    self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                        log::info!(
+                            "Nontracking buffer: {:?}",
+                            buf_id
+                        );
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let text_document_clone = text_document.clone();
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
@@ -442,7 +449,6 @@ impl<E: Editor> Lspc<E> {
                         if let Some(hover) = response {
                             editor.show_hover(&text_document_clone, &hover)?;
                         }
-
                         Ok(())
                     }),
                 )?;

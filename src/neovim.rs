@@ -182,17 +182,18 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
             } else if method == "hover" {
                 #[derive(Deserialize)]
                 struct HoverParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Position,
                 );
-
+                
                 let hover_params: HoverParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
+                let buf_id = BufferHandler(hover_params.0);
                 Ok(Event::Hover {
-                    lang_id: hover_params.0,
+                    buf_id,
                     text_document: hover_params.1,
                     position: hover_params.2,
                 })
