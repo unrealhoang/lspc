@@ -175,6 +175,7 @@ pub trait Editor: 'static {
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn track_all_buffers(&self) -> Result<(), EditorError>;
     fn watch_file_events(
         &mut self,
         text_document: &TextDocumentIdentifier,
@@ -412,6 +413,7 @@ impl<E: Editor> Lspc<E> {
                         handler.initialize_response(response)?;
 
                         editor.message("LangServer initialized")?;
+                        editor.track_all_buffers()?;
                         Ok(())
                     }),
                 )?;

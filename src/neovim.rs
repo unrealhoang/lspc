@@ -623,6 +623,11 @@ impl Editor for Neovim {
         Ok(())
     }
 
+    fn track_all_buffers(&self) -> Result<(), EditorError> {
+        self.call_function("lspc#track_all_buffers", Value::Array(vec![]))?;
+        Ok(())
+    }
+
     fn watch_file_events(
         &mut self,
         _text_document: &TextDocumentIdentifier,

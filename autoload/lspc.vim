@@ -61,6 +61,15 @@ function! lspc#hover()
   call rpcnotify(s:job_id, 'hover', l:buf_id, l:cur_path, l:position)
 endfunction
 
+function! lspc#track_all_buffers()
+  let l:all_buffers = range(1, bufnr('$'))
+  let l:listed_buffers = filter(l:all_buffers, 'buflisted(v:val)')
+  for l:buf_id in listed_buffers
+    let l:buf_path = expand('#' . buf_id . ':p')
+    call rpcnotify(s:job_id, 'did_open', l:buf_id, l:buf_path)
+  endfor
+endfunction
+
 function! lspc#did_open()
   let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
