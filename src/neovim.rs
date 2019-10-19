@@ -218,7 +218,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
             } else if method == "inlay_hints" {
                 #[derive(Deserialize)]
                 struct InlayHintsParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                 );
@@ -226,8 +226,9 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let inlay_hints_params: InlayHintsParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
+                let buf_id = BufferHandler(inlay_hints_params.0);
                 Ok(Event::InlayHints {
-                    lang_id: inlay_hints_params.0,
+                    buf_id,
                     text_document: inlay_hints_params.1,
                 })
             } else if method == "format_doc" {
@@ -1029,11 +1030,11 @@ mod tests {
     fn test_deserialize_inlay_hints_params() {
         let inlay_hints_msg = NvimMessage::RpcNotification {
             method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from("rust"), Value::from("/abc/d.rs")]),
+            params: Value::from(vec![Value::from(1), Value::from("/abc/d.rs")]),
         };
         let text_document = to_text_document("/abc/d.rs").unwrap();
         let expected = Event::InlayHints {
-            lang_id: String::from("rust"),
+            buf_id: BufferHandler(1),
             text_document,
         };
 
@@ -1045,11 +1046,11 @@ mod tests {
     fn test_deserialize_inlay_hints_params() {
         let inlay_hints_msg = NvimMessage::RpcNotification {
             method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from("rust"), Value::from(r#"C:\\abc\d.rs"#)]),
+            params: Value::from(vec![Value::from(1), Value::from(r#"C:\\abc\d.rs"#)]),
         };
         let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
         let expected = Event::InlayHints {
-            lang_id: String::from("rust"),
+            buf_id: BufferHandler(1),
             text_document,
         };
 

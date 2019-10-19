@@ -75,9 +75,9 @@ function! lspc#goto_definition()
 endfunction
 
 function! lspc#inlay_hints()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'inlay_hints', l:lang_id, l:cur_path)
+  call rpcnotify(s:job_id, 'inlay_hints', l:buf_id, l:cur_path)
 endfunction
 
 function! lspc#format_doc()
