@@ -24,6 +24,8 @@ function! lspc#init()
   if lspc#started()
     return
   endif
+  
+  let s:lang_servers = []
 
   let l:binpath = s:root . '/target/debug/neovim_lspc'
 
@@ -48,10 +50,19 @@ function! lspc#destroy()
 endfunction
 
 function! lspc#start_lang_server()
-  let l:lang_id = 'rust'
-  let l:config = g:lspc[l:lang_id]
-  let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
+  if exists('b:current_syntax')
+    let l:lang_id = b:current_syntax
+    if has_key(g:lspc, l:lang_id) && !lspc#lang_server_started(l:lang_id)
+      let l:config = g:lspc[l:lang_id]
+      let l:cur_path = lspc#buffer#filename()
+      call add(s:lang_servers, l:lang_id)
+      call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
+    endif
+  endif
+endfunction
+
+function! lspc#lang_server_started(lang_id)
+  return index(s:lang_servers, a:lang_id) >= 0
 endfunction
 
 function! lspc#hover()
@@ -73,6 +84,7 @@ endfunction
 function! lspc#did_open()
   let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
+  call lspc#start_lang_server()
   call rpcnotify(s:job_id, 'did_open', l:buf_id, l:cur_path)
 endfunction
 
