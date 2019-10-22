@@ -126,39 +126,52 @@ function! lspc#command#open_hover_preview(bufname, lines, filetype) abort
     endif
 endfunction
 
+" Used for prevent select on unwanted line in reference buffer
+function! s:reference_prevent_touch_line(untouch_lines)
+  let l:line = line('.')
+  while index(a:untouch_lines, l:line) >= 0
+    let l:line = l:line + 1
+    call cursor(col('.'), l:line)
+  endwhile
+endfunction
 " Open reference window. Window is open in:
 "   - Floating window on Neovim (0.4.0 or later)
 "   - Preview window on Neovim (0.3.0 or earlier) or Vim
 function! lspc#command#open_reference_preview(bufname, lines) abort
-    " Use local variable since parameter is not modifiable
-    let lines = a:lines
-    let height = float2nr((&lines - 2) * 0.6) " lightline + status
-    let row = float2nr((&lines - height) / 2)
-    let width = &columns
-    let col = 0
-    let opts = {
-        \ 'relative': 'editor',
-        \ 'row': row,
-        \ 'col': col,
-        \ 'width': width,
-        \ 'height': height
-        \ }
+  let lines = a:lines
+  let height = float2nr((&lines - 2) * 0.6) " lightline + status
+  let row = float2nr((&lines - height) / 2)
+  let width = float2nr(&columns * 0.3)
+  let col = 0
+  let opts = {
+      \ 'relative': 'editor',
+      \ 'row': row,
+      \ 'col': col,
+      \ 'width': width,
+      \ 'height': height
+      \ }
 
-    let buf = nvim_create_buf(v:false, v:true)
-    let win = nvim_open_win(buf, v:true, opts)
+  let buf = nvim_create_buf(v:false, v:true)
+  let win = nvim_open_win(buf, v:true, opts)
 
-    "Set Floating Window Highlighting
-    call setwinvar(win, '&winhl', 'Normal:Pmenu')
-    execute 'noswapfile edit!' a:bufname
-    setlocal
-      \ buftype=nofile
-      \ nobuflisted
-      \ nonumber
-      \ bufhidden=hide
-      \ norelativenumber
-      \ signcolumn=no
+  execute 'noswapfile edit!' a:bufname
+  setlocal
+    \ buftype=nofile
+    \ nobuflisted
+    \ nonumber
+    \ bufhidden=hide
+    \ norelativenumber
+    \ signcolumn=no
+    \ cursorline
+    \ cc=
 
-    let reference_count = len(lines)
-    call setline(1, reference_count . ' reference' . (reference_count > 1 ? 's' : ''))
-    call setline(2, lines)
+  let s:untouch_lines = [1]
+  let reference_count = len(lines)
+  call setline(1, reference_count . ' reference' . (reference_count > 1 ? 's' : ''))
+  call setline(2, lines)
+  call s:reference_prevent_touch_line(s:untouch_lines)
+
+  augroup plugin-lspc-reference control
+    autocmd CursorMoved <buffer> call s:reference_prevent_touch_line(s:untouch_lines)
+  augroup END
 endfunction
