@@ -1,6 +1,6 @@
-function! lspc#config()
-
-endfunction
+let s:config = {
+      \ 'auto_start': v:true,
+      \ }
 
 function! lspc#output(log)
   " if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
@@ -21,10 +21,12 @@ function! s:echo_handler(job_id, data, name)
 endfunction
 
 function! lspc#init()
+  call extend(s:config, g:lspc)
+
   if lspc#started()
     return
   endif
-  
+
   let s:lang_servers = []
 
   let l:binpath = s:root . '/target/debug/neovim_lspc'
@@ -52,8 +54,8 @@ endfunction
 function! lspc#start_lang_server()
   if exists('b:current_syntax')
     let l:lang_id = b:current_syntax
-    if has_key(g:lspc, l:lang_id) && !lspc#lang_server_started(l:lang_id)
-      let l:config = g:lspc[l:lang_id]
+    if has_key(s:config, l:lang_id) && !lspc#lang_server_started(l:lang_id)
+      let l:config = s:config[l:lang_id]
       let l:cur_path = lspc#buffer#filename()
       call add(s:lang_servers, l:lang_id)
       call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
@@ -84,7 +86,9 @@ endfunction
 function! lspc#did_open()
   let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call lspc#start_lang_server()
+  if s:config['auto_start']
+    call lspc#start_lang_server()
+  endif
   call rpcnotify(s:job_id, 'did_open', l:buf_id, l:cur_path)
 endfunction
 
