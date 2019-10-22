@@ -21,7 +21,12 @@ pub fn stdoutlock() -> StdoutLock<'static> {
 }
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    simple_logging::log_to_file("log.txt", log::LevelFilter::Debug).expect("Can not open log file");
+    let mut log_dir = dirs::home_dir().expect("Home directory not found");
+    log_dir.push(".vim");
+    std::fs::create_dir_all(&log_dir).expect("Cannot create log directory");
+
+    log_dir.push("lspc_log.txt");
+    simple_logging::log_to_file(log_dir, log::LevelFilter::Debug).expect("Can not open log file");
 
     let nvim_rpc = Client::<NvimMessage>::new(stdinlock, stdoutlock);
     let neovim = Neovim::new(nvim_rpc);
