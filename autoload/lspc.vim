@@ -74,6 +74,14 @@ function! lspc#hover()
   call rpcnotify(s:job_id, 'hover', l:buf_id, l:cur_path, l:position)
 endfunction
 
+function! lspc#reference()
+  let l:buf_id = bufnr()
+  let l:cur_path = lspc#buffer#filename()
+  let l:position = lspc#buffer#position()
+  let l:include_declaration = v:false
+  call rpcnotify(s:job_id, 'references', l:buf_id, l:cur_path, l:position, l:include_declaration)
+endfunction
+
 function! lspc#track_all_buffers()
   let l:all_buffers = range(1, bufnr('$'))
   let l:listed_buffers = filter(l:all_buffers, 'buflisted(v:val)')

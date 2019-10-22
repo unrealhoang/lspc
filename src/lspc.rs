@@ -13,7 +13,7 @@ use std::{
 use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
     self as lsp, notification as noti,
-    request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
+    request::{References, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
 };
@@ -78,6 +78,12 @@ pub enum Event<B: BufferId> {
     DidClose {
         buf_id: B,
     },
+    References {
+        buf_id: B,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+        include_declaration: bool
+    }
 }
 
 #[derive(Debug)]
@@ -173,6 +179,11 @@ pub trait Editor: 'static {
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError>;
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
+    fn show_references(
+        &mut self,
+        text_document: &TextDocumentIdentifier,
+        locations: &Vec<Location>
+    ) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
     fn track_all_buffers(&self) -> Result<(), EditorError>;
@@ -593,6 +604,40 @@ impl<E: Editor> Lspc<E> {
                     lsp::DidCloseTextDocumentParams {
                         text_document: tracking_buf.text_document.clone(),
                     },
+                )?;
+            }
+            Event::References {
+                buf_id,
+                text_document,
+                position,
+                include_declaration
+            } => {
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
+
+                let text_document_clone = text_document.clone();
+
+                let params = lsp::ReferenceParams {
+                    text_document_position: lsp::TextDocumentPositionParams {
+                        text_document,
+                        position
+                    },
+                    context: lsp::ReferenceContext {
+                        include_declaration
+                    }
+                };
+
+                handler.lsp_request::<References>(
+                    params,
+                    Box::new(move |editor: &mut E, _handler, response| {
+                        if let Some(locations) = response {
+                            editor.show_references(&text_document_clone, &locations)?;
+                        }
+
+                        Ok(())
+                    }),
                 )?;
             }
         }

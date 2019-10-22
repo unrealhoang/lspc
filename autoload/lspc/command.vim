@@ -125,3 +125,40 @@ function! lspc#command#open_hover_preview(bufname, lines, filetype) abort
         augroup END
     endif
 endfunction
+
+" Open reference window. Window is open in:
+"   - Floating window on Neovim (0.4.0 or later)
+"   - Preview window on Neovim (0.3.0 or earlier) or Vim
+function! lspc#command#open_reference_preview(bufname, lines) abort
+    " Use local variable since parameter is not modifiable
+    let lines = a:lines
+    let height = float2nr((&lines - 2) * 0.6) " lightline + status
+    let row = float2nr((&lines - height) / 2)
+    let width = &columns
+    let col = 0
+    let opts = {
+        \ 'relative': 'editor',
+        \ 'row': row,
+        \ 'col': col,
+        \ 'width': width,
+        \ 'height': height
+        \ }
+
+    let buf = nvim_create_buf(v:false, v:true)
+    let win = nvim_open_win(buf, v:true, opts)
+
+    "Set Floating Window Highlighting
+    call setwinvar(win, '&winhl', 'Normal:Pmenu')
+    execute 'noswapfile edit!' a:bufname
+    setlocal
+      \ buftype=nofile
+      \ nobuflisted
+      \ nonumber
+      \ bufhidden=hide
+      \ norelativenumber
+      \ signcolumn=no
+
+    let reference_count = len(lines)
+    call setline(1, reference_count . ' reference' . (reference_count > 1 ? 's' : ''))
+    call setline(2, lines)
+endfunction

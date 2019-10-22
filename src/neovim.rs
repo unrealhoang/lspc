@@ -325,6 +325,26 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 Ok(Event::DidClose {
                     buf_id: buf_handler,
                 })
+            } else if method == "references" {
+                #[derive(Deserialize)]
+                struct ReferencesParams(
+                    i64,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                    bool
+                );
+
+                let references_params: ReferencesParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
+
+                let buf_id = BufferHandler(references_params.0);
+                Ok(Event::References {
+                    buf_id,
+                    text_document: references_params.1,
+                    position: references_params.2,
+                    include_declaration: references_params.3
+                })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
                     "unexpected notification {:?} {:?}",
@@ -620,6 +640,26 @@ impl Editor for Neovim {
             Value::Array(new_lines),
         ]);
         self.call_function("nvim_buf_set_lines", params)?;
+        Ok(())
+    }
+
+    fn show_references(
+        &mut self,
+        _text_document: &TextDocumentIdentifier,
+        locations: &Vec<Location>,
+    ) -> Result<(), EditorError> {
+        // FIXME: check current buffer is `text_document`
+        let bufname = "__LanguageClient__";
+        let lines: Value = locations
+            .iter()
+            .map(|item| Value::from(item.uri.as_str()))
+            .collect::<Vec<_>>()
+            .into();
+        self.call_function(
+            "lspc#command#open_reference_preview",
+            vec![bufname.into(), lines].into(),
+        )?;
+
         Ok(())
     }
 
