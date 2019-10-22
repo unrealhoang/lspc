@@ -12,8 +12,7 @@ use std::{
 
 use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
-    self as lsp,
-    notification::{self as noti},
+    self as lsp, notification as noti,
     request::{Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
@@ -49,21 +48,21 @@ pub enum Event<B: BufferId> {
         cur_path: String,
     },
     Hover {
-        lang_id: String,
+        buf_id: B,
         text_document: TextDocumentIdentifier,
         position: Position,
     },
     GotoDefinition {
-        lang_id: String,
+        buf_id: B,
         text_document: TextDocumentIdentifier,
         position: Position,
     },
     InlayHints {
-        lang_id: String,
+        buf_id: B,
         text_document: TextDocumentIdentifier,
     },
     FormatDoc {
-        lang_id: String,
+        buf_id: B,
         text_document_lines: Vec<String>,
         text_document: TextDocumentIdentifier,
     },
@@ -176,6 +175,7 @@ pub trait Editor: 'static {
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
+    fn track_all_buffers(&self) -> Result<(), EditorError>;
     fn watch_file_events(
         &mut self,
         text_document: &TextDocumentIdentifier,
@@ -352,12 +352,6 @@ where
 }
 
 impl<E: Editor> Lspc<E> {
-    fn handler_for(&mut self, lang_id: &str) -> Option<&mut LangServerHandler<E>> {
-        self.lsp_handlers
-            .iter_mut()
-            .find(|handler| handler.lang_id == lang_id)
-    }
-
     fn handler_for_buffer(
         &mut self,
         buf_id: &E::BufferId,
@@ -419,6 +413,7 @@ impl<E: Editor> Lspc<E> {
                         handler.initialize_response(response)?;
 
                         editor.message("LangServer initialized")?;
+                        editor.track_all_buffers()?;
                         Ok(())
                     }),
                 )?;
@@ -426,11 +421,14 @@ impl<E: Editor> Lspc<E> {
                 self.lsp_handlers.push(lsp_handler);
             }
             Event::Hover {
-                lang_id,
+                buf_id,
                 text_document,
                 position,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let text_document_clone = text_document.clone();
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
@@ -442,17 +440,19 @@ impl<E: Editor> Lspc<E> {
                         if let Some(hover) = response {
                             editor.show_hover(&text_document_clone, &hover)?;
                         }
-
                         Ok(())
                     }),
                 )?;
             }
             Event::GotoDefinition {
-                lang_id,
+                buf_id,
                 text_document,
                 position,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
                     position,
@@ -481,10 +481,13 @@ impl<E: Editor> Lspc<E> {
                 )?;
             }
             Event::InlayHints {
-                lang_id,
+                buf_id,
                 text_document,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let text_document_clone = text_document.clone();
                 let params = InlayHintsParams { text_document };
                 handler.lsp_request::<InlayHints>(
@@ -497,11 +500,14 @@ impl<E: Editor> Lspc<E> {
                 )?;
             }
             Event::FormatDoc {
-                lang_id,
+                buf_id,
                 text_document_lines,
                 text_document,
             } => {
-                let handler = self.handler_for(&lang_id).ok_or(LspcError::NotStarted)?;
+                let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
+                    log::info!("Nontracking buffer: {:?}", buf_id);
+                    MainLoopError::IgnoredMessage
+                })?;
                 let options = FormattingOptions {
                     tab_size: handler.lang_settings.indentation,
                     insert_spaces: handler.lang_settings.indentation_with_space,

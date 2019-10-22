@@ -182,7 +182,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
             } else if method == "hover" {
                 #[derive(Deserialize)]
                 struct HoverParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Position,
@@ -191,15 +191,16 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let hover_params: HoverParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
+                let buf_id = BufferHandler(hover_params.0);
                 Ok(Event::Hover {
-                    lang_id: hover_params.0,
+                    buf_id,
                     text_document: hover_params.1,
                     position: hover_params.2,
                 })
             } else if method == "goto_definition" {
                 #[derive(Deserialize)]
                 struct GotoDefinitionParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Position,
@@ -208,15 +209,16 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let goto_definition_params: GotoDefinitionParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
+                let buf_id = BufferHandler(goto_definition_params.0);
                 Ok(Event::GotoDefinition {
-                    lang_id: goto_definition_params.0,
+                    buf_id,
                     text_document: goto_definition_params.1,
                     position: goto_definition_params.2,
                 })
             } else if method == "inlay_hints" {
                 #[derive(Deserialize)]
                 struct InlayHintsParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                 );
@@ -224,14 +226,15 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let inlay_hints_params: InlayHintsParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
+                let buf_id = BufferHandler(inlay_hints_params.0);
                 Ok(Event::InlayHints {
-                    lang_id: inlay_hints_params.0,
+                    buf_id,
                     text_document: inlay_hints_params.1,
                 })
             } else if method == "format_doc" {
                 #[derive(Deserialize)]
                 struct FormatDocParams(
-                    String,
+                    i64,
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Vec<String>,
@@ -240,8 +243,9 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let format_doc_params: FormatDocParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
+                let buf_id = BufferHandler(format_doc_params.0);
                 Ok(Event::FormatDoc {
-                    lang_id: format_doc_params.0,
+                    buf_id,
                     text_document: format_doc_params.1,
                     text_document_lines: format_doc_params.2,
                 })
@@ -616,6 +620,11 @@ impl Editor for Neovim {
             Value::Array(new_lines),
         ]);
         self.call_function("nvim_buf_set_lines", params)?;
+        Ok(())
+    }
+
+    fn track_all_buffers(&self) -> Result<(), EditorError> {
+        self.call_function("lspc#track_all_buffers", Value::Array(vec![]))?;
         Ok(())
     }
 
@@ -1027,11 +1036,11 @@ mod tests {
     fn test_deserialize_inlay_hints_params() {
         let inlay_hints_msg = NvimMessage::RpcNotification {
             method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from("rust"), Value::from("/abc/d.rs")]),
+            params: Value::from(vec![Value::from(1), Value::from("/abc/d.rs")]),
         };
         let text_document = to_text_document("/abc/d.rs").unwrap();
         let expected = Event::InlayHints {
-            lang_id: String::from("rust"),
+            buf_id: BufferHandler(1),
             text_document,
         };
 
@@ -1043,11 +1052,11 @@ mod tests {
     fn test_deserialize_inlay_hints_params() {
         let inlay_hints_msg = NvimMessage::RpcNotification {
             method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from("rust"), Value::from(r#"C:\\abc\d.rs"#)]),
+            params: Value::from(vec![Value::from(1), Value::from(r#"C:\\abc\d.rs"#)]),
         };
         let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
         let expected = Event::InlayHints {
-            lang_id: String::from("rust"),
+            buf_id: BufferHandler(1),
             text_document,
         };
 

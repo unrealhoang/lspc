@@ -1,6 +1,6 @@
-function! lspc#config()
-
-endfunction
+let s:config = {
+      \ 'auto_start': v:true,
+      \ }
 
 function! lspc#output(log)
   " if !exists('s:output_buffer') || !nvim_buf_is_loaded(s:output_buffer)
@@ -21,9 +21,13 @@ function! s:echo_handler(job_id, data, name)
 endfunction
 
 function! lspc#init()
+  call extend(s:config, g:lspc)
+
   if lspc#started()
     return
   endif
+
+  let s:lang_servers = []
 
   let l:binpath = s:root . '/target/debug/neovim_lspc'
 
@@ -48,44 +52,64 @@ function! lspc#destroy()
 endfunction
 
 function! lspc#start_lang_server()
-  let l:lang_id = 'rust'
-  let l:config = g:lspc[l:lang_id]
-  let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
+  if exists('b:current_syntax')
+    let l:lang_id = b:current_syntax
+    if has_key(s:config, l:lang_id) && !lspc#lang_server_started(l:lang_id)
+      let l:config = s:config[l:lang_id]
+      let l:cur_path = lspc#buffer#filename()
+      call add(s:lang_servers, l:lang_id)
+      call rpcnotify(s:job_id, 'start_lang_server', l:lang_id, l:config, l:cur_path)
+    endif
+  endif
+endfunction
+
+function! lspc#lang_server_started(lang_id)
+  return index(s:lang_servers, a:lang_id) >= 0
 endfunction
 
 function! lspc#hover()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
   let l:position = lspc#buffer#position()
-  call rpcnotify(s:job_id, 'hover', l:lang_id, l:cur_path, l:position)
+  call rpcnotify(s:job_id, 'hover', l:buf_id, l:cur_path, l:position)
+endfunction
+
+function! lspc#track_all_buffers()
+  let l:all_buffers = range(1, bufnr('$'))
+  let l:listed_buffers = filter(l:all_buffers, 'buflisted(v:val)')
+  for l:buf_id in listed_buffers
+    let l:buf_path = expand('#' . buf_id . ':p')
+    call rpcnotify(s:job_id, 'did_open', l:buf_id, l:buf_path)
+  endfor
 endfunction
 
 function! lspc#did_open()
-  let l:lang_id = 'rust'
   let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'did_open', buf_id, l:cur_path)
+  if s:config['auto_start']
+    call lspc#start_lang_server()
+  endif
+  call rpcnotify(s:job_id, 'did_open', l:buf_id, l:cur_path)
 endfunction
 
 function! lspc#goto_definition()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
   let l:position = lspc#buffer#position()
-  call rpcnotify(s:job_id, 'goto_definition', l:lang_id, l:cur_path, l:position)
+  call rpcnotify(s:job_id, 'goto_definition', l:buf_id, l:cur_path, l:position)
 endfunction
 
 function! lspc#inlay_hints()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
-  call rpcnotify(s:job_id, 'inlay_hints', l:lang_id, l:cur_path)
+  call rpcnotify(s:job_id, 'inlay_hints', l:buf_id, l:cur_path)
 endfunction
 
 function! lspc#format_doc()
-  let l:lang_id = 'rust'
+  let l:buf_id = bufnr()
   let l:cur_path = lspc#buffer#filename()
   let l:lines = lspc#buffer#text()
-  call rpcnotify(s:job_id, 'format_doc', l:lang_id, l:cur_path, l:lines)
+  call rpcnotify(s:job_id, 'format_doc', l:buf_id, l:cur_path, l:lines)
 endfunction
 
 function! lspc#hello_from_the_other_side()
