@@ -13,7 +13,9 @@ use std::{
 use crossbeam::channel::{tick, Receiver, Select};
 use lsp_types::{
     self as lsp, notification as noti,
-    request::{References, Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize},
+    request::{
+        Formatting, GotoDefinition, GotoDefinitionResponse, HoverRequest, Initialize, References,
+    },
     DocumentFormattingParams, FormattingOptions, Hover, Location, Position, ShowMessageParams,
     TextDocumentIdentifier, TextEdit,
 };
@@ -82,8 +84,8 @@ pub enum Event<B: BufferId> {
         buf_id: B,
         text_document: TextDocumentIdentifier,
         position: Position,
-        include_declaration: bool
-    }
+        include_declaration: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -606,7 +608,7 @@ impl<E: Editor> Lspc<E> {
                 buf_id,
                 text_document,
                 position,
-                include_declaration
+                include_declaration,
             } => {
                 let (handler, _) = self.handler_for_buffer(&buf_id).ok_or_else(|| {
                     log::info!("Nontracking buffer: {:?}", buf_id);
@@ -616,11 +618,11 @@ impl<E: Editor> Lspc<E> {
                 let params = lsp::ReferenceParams {
                     text_document_position: lsp::TextDocumentPositionParams {
                         text_document,
-                        position
+                        position,
                     },
                     context: lsp::ReferenceContext {
-                        include_declaration
-                    }
+                        include_declaration,
+                    },
                 };
 
                 handler.lsp_request::<References>(

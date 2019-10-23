@@ -332,7 +332,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     #[serde(deserialize_with = "text_document_from_path_str")]
                     TextDocumentIdentifier,
                     Position,
-                    bool
+                    bool,
                 );
 
                 let references_params: ReferencesParams = Deserialize::deserialize(params)
@@ -343,7 +343,7 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     buf_id,
                     text_document: references_params.1,
                     position: references_params.2,
-                    include_declaration: references_params.3
+                    include_declaration: references_params.3,
                 })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
@@ -643,10 +643,7 @@ impl Editor for Neovim {
         Ok(())
     }
 
-    fn show_references(
-        &mut self,
-        locations: &Vec<Location>,
-    ) -> Result<(), EditorError> {
+    fn show_references(&mut self, locations: &Vec<Location>) -> Result<(), EditorError> {
         let mut items: Vec<Value> = Vec::new();
         for location in locations {
             let mut item: Vec<(Value, Value)> = Vec::new();
