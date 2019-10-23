@@ -126,119 +126,17 @@ function! lspc#command#open_hover_preview(bufname, lines, filetype) abort
     endif
 endfunction
 
-" Used for prevent select on unwanted line in reference buffer
-function! s:reference_prevent_touch_line(untouch_lines)
-endfunction
-
-function! s:count_digits(number)
-  let digits = 0
-  let n = a:number
-  if n == 0
-    return 1
-  endif
-  while n != 0
-    let n = n / 10
-    let digits = digits + 1
-  endwhile
-  return digits
-endfunction
-
-function! s:pluralize(word, quantity)
-  return a:word . (a:quantity > 1 ? 's' : '')
-endfunction
-
-" Open reference window. Window is open in:
-"   - Floating window on Neovim (0.4.0 or later)
-"   - Preview window on Neovim (0.3.0 or earlier) or Vim
-function! lspc#command#open_reference_preview(bufname, references) abort
+function! lspc#command#open_reference_preview(references) abort
   let references = a:references
-  let height = float2nr((&lines - 2) * 0.6) " lightline + status
-  let row = float2nr((&lines - height) / 2)
-  let width = float2nr(&columns * 0.5)
-  let col = 0
-  let opts = {
-      \ 'relative': 'editor',
-      \ 'row': row,
-      \ 'col': col,
-      \ 'width': width,
-      \ 'height': height
-      \ }
-  let select_buf = nvim_create_buf(v:false, v:true)
-  let select_win = nvim_open_win(select_buf, v:true, opts)
-
-  execute 'noswapfile edit!' a:bufname
-  setlocal
-    \ buftype=nofile
-    \ nobuflisted
-    \ nonumber
-    \ nowrap
-    \ bufhidden=hide
-    \ norelativenumber
-    \ signcolumn=no
-    \ cursorline
-    \ cc=
-  
-  let b:untouch_lines = [1]
-  let total_reference_count = 0
-  let max_num_line = 0
-  for key in keys(references)
-    for line in references[key]
-      let total_reference_count = total_reference_count + 1
-      if max_num_line < line
-        let max_num_line = line
-      endif
-    endfor
+  for reference in references
+    let buf_id = bufnr(reference.filename . '$')
+    if buf_id >= 0
+      let content = getbufline(buf_id, reference.lnum)[0]
+    else
+      let content = readfile(reference.filename)[reference.lnum - 1]
+    endif
+    let reference.text = content
   endfor
-
-  let max_num_length = s:count_digits(max_num_line)
-  
-  call setline(1, total_reference_count . s:pluralize(' reference', total_reference_count))
-  
-  let current_line = 2
-
-  if total_reference_count == 0
-    call setline(current_line, 'No reference found!')
-    let b:previous_line = 2
-  else
-    let b:previous_line = 3
-  endif
-
-  call cursor(col('.'), b:previous_line)
-
-  for file_name in keys(references)
-    let buffer_id = bufnr(file_name . '$')
-    let reference_lines = references[file_name]
-    let reference_count = len(reference_lines)
-    let title = pathshorten(file_name) . ' - ' . reference_count . s:pluralize(' reference', reference_count)
-    let pad_spaces = width - strlen(title)
-    let pad_spaces = pad_spaces >= 0 ? pad_spaces : 0
-    let title = title . repeat(' ', pad_spaces)
-    call setline(current_line, title)
-    execute "let m = matchadd('WildMenu','\\%" . current_line . "l')"
-    call add(b:untouch_lines, current_line)
-    let current_line = current_line + 1
-
-    for line in reference_lines
-      if buffer_id > 0
-        let line_content = getbufline(buffer_id, line)[0]
-      else
-        let line_content = readfile(file_name)[line - 1]
-      endif
-      let current_width = s:count_digits(line)
-      let spaces = max_num_length - current_width
-      let line_content = repeat(' ', spaces) . line . '| ' . trim(line_content)
-      call setline(current_line, line_content)
-      let current_line = current_line + 1
-    endfor
-  endfor
-
-  let b:references = a:references
-  let b:code_buf = code_buf
-  call s:reference_prevent_touch_line(b:untouch_lines)
-
-  augroup plugin-lspc-reference control
-    autocmd CursorMoved <buffer> call s:reference_prevent_touch_line(b:untouch_lines)
-    autocmd BufLeave <buffer> call :bd
-  augroup END
-  
+  call setqflist([], 'r', {'title' : 'Lspc references view', 'items': references})
+  exec 'copen'
 endfunction

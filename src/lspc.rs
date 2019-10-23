@@ -179,11 +179,7 @@ pub trait Editor: 'static {
         hints: &Vec<InlayHint>,
     ) -> Result<(), EditorError>;
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
-    fn show_references(
-        &mut self,
-        text_document: &TextDocumentIdentifier,
-        locations: &Vec<Location>
-    ) -> Result<(), EditorError>;
+    fn show_references(&mut self, locations: &Vec<Location>) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
     fn track_all_buffers(&self) -> Result<(), EditorError>;
@@ -617,8 +613,6 @@ impl<E: Editor> Lspc<E> {
                     MainLoopError::IgnoredMessage
                 })?;
 
-                let text_document_clone = text_document.clone();
-
                 let params = lsp::ReferenceParams {
                     text_document_position: lsp::TextDocumentPositionParams {
                         text_document,
@@ -633,7 +627,7 @@ impl<E: Editor> Lspc<E> {
                     params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(locations) = response {
-                            editor.show_references(&text_document_clone, &locations)?;
+                            editor.show_references(&locations)?;
                         }
 
                         Ok(())

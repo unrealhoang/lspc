@@ -6,7 +6,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
     time::Duration,
-    path::Path
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -646,40 +645,19 @@ impl Editor for Neovim {
 
     fn show_references(
         &mut self,
-        _text_document: &TextDocumentIdentifier,
         locations: &Vec<Location>,
     ) -> Result<(), EditorError> {
-        // FIXME: check current buffer is `text_document`
-        let bufname = "__LanguageClient__";
-        let mut references: Vec<(String, Vec<u64>)> = Vec::new();
+        let mut items: Vec<Value> = Vec::new();
         for location in locations {
-            let path = Path::new(location.uri.path());
-            let file_name = path.to_str().unwrap();
-            let position = references.iter().position(|r| r.0 == file_name);
-            let reference: &mut (String, Vec<u64>) = match position {
-                Some(index) => &mut references[index],
-                None => {
-                    references.push((file_name.to_string(), Vec::new()));
-                    let references_len = references.len() - 1;
-                    &mut references[references_len]
-                }
-            };
-            reference.1.push(location.range.start.line);
+            let mut item: Vec<(Value, Value)> = Vec::new();
+            item.push(("filename".into(), location.uri.path().into()));
+            item.push(("lnum".into(), (location.range.start.line + 1).into()));
+            item.push(("col".into(), (location.range.start.character + 1).into()));
+            items.push(Value::from(item));
         }
-        let reference_data: Vec<(Value, Value)> = references
-            .iter()
-            .map(|reference| {
-                let file_name = reference.0.clone().into();
-                let file_references: Vec<Value> = reference.1
-                    .iter()
-                    .map(|r| Value::from(*r))
-                    .collect();
-                (file_name, file_references.into())
-            })
-            .collect();
         self.call_function(
             "lspc#command#open_reference_preview",
-            Value::Array(vec![bufname.into(), reference_data.into()]),
+            Value::Array(vec![items.into()]),
         )?;
 
         Ok(())
