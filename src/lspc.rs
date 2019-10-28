@@ -163,6 +163,8 @@ pub trait Editor: 'static {
     fn events(&self) -> Receiver<Event>;
     fn capabilities(&self) -> lsp_types::ClientCapabilities;
     fn say_hello(&self) -> Result<(), EditorError>;
+
+    fn init(&mut self) -> Result<(), EditorError>;
     fn message(&mut self, msg: &str) -> Result<(), EditorError>;
     fn show_hover(
         &mut self,
@@ -176,6 +178,11 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
     fn show_message(&mut self, show_message_params: &ShowMessageParams) -> Result<(), EditorError>;
     fn show_references(&mut self, locations: &Vec<Location>) -> Result<(), EditorError>;
+    fn show_diagnostics(
+        &mut self,
+        text_document: &TextDocumentIdentifier,
+        diagnostics: &[lsp_types::Diagnostic],
+    ) -> Result<(), EditorError>;
     fn goto(&mut self, location: &Location) -> Result<(), EditorError>;
     fn apply_edits(&self, lines: &Vec<String>, edits: &Vec<TextEdit>) -> Result<(), EditorError>;
     fn track_all_buffers(&self) -> Result<(), EditorError>;
@@ -645,6 +652,23 @@ impl<E: Editor> Lspc<E> {
                     }
                     Err(noti) => noti,
                 };
+                noti = match noti.cast::<noti::PublishDiagnostics>() {
+                    Ok(params) => {
+                        let (_handler, _tracking_file, editor) =
+                            self.handler_for_file(&params.uri).ok_or_else(|| {
+                                log::info!(
+                                    "Received changed event for nontracking file: {:?}",
+                                    params.uri
+                                );
+                                MainLoopError::IgnoredMessage
+                            })?;
+                        let text_document = TextDocumentIdentifier::new(params.uri);
+                        editor.show_diagnostics(&text_document, &params.diagnostics)?;
+
+                        return Ok(());
+                    }
+                    Err(noti) => noti,
+                };
 
                 log::warn!("Not supported notification: {:?}", noti);
             }
@@ -701,6 +725,11 @@ impl<E: Editor> Lspc<E> {
     pub fn main_loop(mut self) {
         let event_receiver = self.editor.events();
         let timer_tick = tick(Duration::from_millis(TIMER_TICK_MS));
+
+        if let Err(e) = self.editor.init() {
+            log::error!("Editor initialization error: {:?}", e);
+            return;
+        }
 
         loop {
             let selected = select(&event_receiver, &timer_tick, &self.lsp_handlers);
