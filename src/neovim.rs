@@ -325,6 +325,26 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 Ok(Event::DidClose {
                     buf_id: buf_handler,
                 })
+            } else if method == "references" {
+                #[derive(Deserialize)]
+                struct ReferencesParams(
+                    i64,
+                    #[serde(deserialize_with = "text_document_from_path_str")]
+                    TextDocumentIdentifier,
+                    Position,
+                    bool,
+                );
+
+                let references_params: ReferencesParams = Deserialize::deserialize(params)
+                    .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
+
+                let buf_id = BufferHandler(references_params.0);
+                Ok(Event::References {
+                    buf_id,
+                    text_document: references_params.1,
+                    position: references_params.2,
+                    include_declaration: references_params.3,
+                })
             } else {
                 Err(EditorError::UnexpectedMessage(format!(
                     "unexpected notification {:?} {:?}",
@@ -620,6 +640,23 @@ impl Editor for Neovim {
             Value::Array(new_lines),
         ]);
         self.call_function("nvim_buf_set_lines", params)?;
+        Ok(())
+    }
+
+    fn show_references(&mut self, locations: &Vec<Location>) -> Result<(), EditorError> {
+        let mut items: Vec<Value> = Vec::new();
+        for location in locations {
+            let mut item: Vec<(Value, Value)> = Vec::new();
+            item.push(("filename".into(), location.uri.path().into()));
+            item.push(("lnum".into(), (location.range.start.line + 1).into()));
+            item.push(("col".into(), (location.range.start.character + 1).into()));
+            items.push(Value::from(item));
+        }
+        self.call_function(
+            "lspc#command#open_reference_preview",
+            Value::Array(vec![items.into()]),
+        )?;
+
         Ok(())
     }
 

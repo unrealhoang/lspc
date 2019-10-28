@@ -125,3 +125,18 @@ function! lspc#command#open_hover_preview(bufname, lines, filetype) abort
         augroup END
     endif
 endfunction
+
+function! lspc#command#open_reference_preview(references) abort
+  let references = a:references
+  for reference in references
+    let buf_id = bufnr(reference.filename . '$')
+    if buf_id >= 0
+      let content = getbufline(buf_id, reference.lnum)[0]
+    else
+      let content = readfile(reference.filename)[reference.lnum - 1]
+    endif
+    let reference.text = content
+  endfor
+  call setqflist([], 'r', {'title' : 'Lspc references view', 'items': references})
+  exec 'copen'
+endfunction
