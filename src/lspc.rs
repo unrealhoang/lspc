@@ -430,10 +430,11 @@ impl<E: Editor> Lspc<E> {
                 text_document,
                 position,
             } => {
-                let (handler, _, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!("Nontracking file: {:?}", text_document);
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, _, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!("Nontracking file: {:?}", text_document);
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let text_document_clone = text_document.clone();
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
@@ -453,10 +454,11 @@ impl<E: Editor> Lspc<E> {
                 text_document,
                 position,
             } => {
-                let (handler, _, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!("Nontracking file: {:?}", text_document);
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, _, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!("Nontracking file: {:?}", text_document);
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let params = lsp_types::TextDocumentPositionParams {
                     text_document,
                     position,
@@ -484,13 +486,12 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
-            Event::InlayHints {
-                text_document,
-            } => {
-                let (handler, _, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!("Nontracking file: {:?}", text_document);
-                    MainLoopError::IgnoredMessage
-                })?;
+            Event::InlayHints { text_document } => {
+                let (handler, _, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!("Nontracking file: {:?}", text_document);
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let text_document_clone = text_document.clone();
                 let params = InlayHintsParams { text_document };
                 handler.lsp_request::<InlayHints>(
@@ -506,10 +507,11 @@ impl<E: Editor> Lspc<E> {
                 text_document_lines,
                 text_document,
             } => {
-                let (handler, _, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!("Nontracking file: {:?}", text_document);
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, _, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!("Nontracking file: {:?}", text_document);
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let options = FormattingOptions {
                     tab_size: handler.lang_settings.indentation,
                     insert_spaces: handler.lang_settings.indentation_with_space,
@@ -535,10 +537,11 @@ impl<E: Editor> Lspc<E> {
                 position,
                 include_declaration,
             } => {
-                let (handler, _, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!("Nontracking file: {:?}", text_document);
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, _, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!("Nontracking file: {:?}", text_document);
+                        MainLoopError::IgnoredMessage
+                    })?;
                 let params = lsp::ReferenceParams {
                     text_document_position: lsp::TextDocumentPositionParams {
                         text_document,
@@ -560,9 +563,7 @@ impl<E: Editor> Lspc<E> {
                     }),
                 )?;
             }
-            Event::DidOpen {
-                text_document,
-            } => {
+            Event::DidOpen { text_document } => {
                 let file_path = text_document.uri.path();
                 let handler = handler_of(&mut self.lsp_handlers, &file_path).ok_or_else(|| {
                     log::info!("Unmanaged file: {:?}", text_document.uri);
@@ -580,13 +581,14 @@ impl<E: Editor> Lspc<E> {
                 version,
                 content_change,
             } => {
-                let (handler, tracking_file, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!(
-                        "Received changed event for nontracking file: {:?}",
-                        text_document
-                    );
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, tracking_file, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!(
+                            "Received changed event for nontracking file: {:?}",
+                            text_document
+                        );
+                        MainLoopError::IgnoredMessage
+                    })?;
 
                 if !tracking_file.sent_did_open {
                     handler.lsp_notify::<noti::DidOpenTextDocument>(
@@ -609,13 +611,14 @@ impl<E: Editor> Lspc<E> {
                 }
             }
             Event::DidClose { text_document } => {
-                let (handler, tracking_file, _) = self.handler_for_file(&text_document.uri).ok_or_else(|| {
-                    log::info!(
-                        "Received changed event for nontracking file: {:?}",
-                        text_document
-                    );
-                    MainLoopError::IgnoredMessage
-                })?;
+                let (handler, tracking_file, _) =
+                    self.handler_for_file(&text_document.uri).ok_or_else(|| {
+                        log::info!(
+                            "Received changed event for nontracking file: {:?}",
+                            text_document
+                        );
+                        MainLoopError::IgnoredMessage
+                    })?;
 
                 tracking_file.sync_pending_changes(handler)?;
                 handler.lsp_notify::<noti::DidCloseTextDocument>(
@@ -676,10 +679,7 @@ impl<E: Editor> Lspc<E> {
         for uri in sync_due_files {
             log::debug!("File changes due: {:?}", uri);
             let (handler, tracking_file, _) = self.handler_for_file(&uri).ok_or_else(|| {
-                log::info!(
-                    "Received changed event for nontracking file: {:?}",
-                    uri
-                );
+                log::info!("Received changed event for nontracking file: {:?}", uri);
                 MainLoopError::IgnoredMessage
             })?;
             tracking_file.sync_pending_changes(handler)?;

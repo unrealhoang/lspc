@@ -3,13 +3,16 @@ use std::{
     error::Error,
     fmt,
     io::{BufRead, Write},
-    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use crossbeam::channel::{self, Receiver, Sender};
 use bimap::BiMap;
+use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
     self as lsp, GotoCapability, Hover, HoverCapability, HoverContents, Location, MarkedString,
@@ -195,7 +198,10 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let buf_id = BufferHandler(hover_params.0);
                 let text_document = hover_params.1;
 
-                buf_mapper.lock().unwrap().insert(buf_id.0, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
 
                 Ok(Event::Hover {
                     text_document,
@@ -216,7 +222,10 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let buf_id = BufferHandler(goto_definition_params.0);
                 let text_document = goto_definition_params.1;
 
-                buf_mapper.lock().unwrap().insert(buf_id.0, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
 
                 Ok(Event::GotoDefinition {
                     text_document,
@@ -236,11 +245,12 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let buf_id = BufferHandler(inlay_hints_params.0);
                 let text_document = inlay_hints_params.1;
 
-                buf_mapper.lock().unwrap().insert(buf_id.0, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
 
-                Ok(Event::InlayHints {
-                    text_document,
-                })
+                Ok(Event::InlayHints { text_document })
             } else if method == "format_doc" {
                 #[derive(Deserialize)]
                 struct FormatDocParams(
@@ -256,7 +266,10 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let buf_id = BufferHandler(format_doc_params.0);
                 let text_document = format_doc_params.1;
 
-                buf_mapper.lock().unwrap().insert(buf_id.0, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
 
                 Ok(Event::FormatDoc {
                     text_document,
@@ -275,11 +288,12 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let text_document = did_open_params.1;
                 let buf_id = BufferHandler(did_open_params.0);
 
-                buf_mapper.lock().unwrap().insert(buf_id.0, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
 
-                Ok(Event::DidOpen {
-                    text_document,
-                })
+                Ok(Event::DidOpen { text_document })
 
             // Callback messages
             } else if method == "nvim_buf_lines_event" {
@@ -318,10 +332,10 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 };
                 let text_document = {
                     let unlocked_buf_mapper = buf_mapper.lock().unwrap();
-                    let uri = unlocked_buf_mapper.get_by_left(&buf_handler.0).ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
-                    TextDocumentIdentifier {
-                        uri: uri.clone()
-                    }
+                    let uri = unlocked_buf_mapper
+                        .get_by_left(&buf_handler.0)
+                        .ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
+                    TextDocumentIdentifier { uri: uri.clone() }
                 };
 
                 Ok(Event::DidChange {
@@ -345,15 +359,13 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
 
                 let text_document = {
                     let unlocked_buf_mapper = buf_mapper.lock().unwrap();
-                    let uri = unlocked_buf_mapper.get_by_left(&buf_handler.0).ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
-                    TextDocumentIdentifier {
-                        uri: uri.clone()
-                    }
+                    let uri = unlocked_buf_mapper
+                        .get_by_left(&buf_handler.0)
+                        .ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
+                    TextDocumentIdentifier { uri: uri.clone() }
                 };
 
-                Ok(Event::DidClose {
-                    text_document
-                })
+                Ok(Event::DidClose { text_document })
             } else if method == "references" {
                 #[derive(Deserialize)]
                 struct ReferencesParams(
@@ -370,7 +382,10 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
                 let buf_id = references_params.0;
                 let text_document = references_params.1;
 
-                buf_mapper.lock().unwrap().insert(buf_id, text_document.uri.clone());
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id, text_document.uri.clone());
 
                 Ok(Event::References {
                     text_document,
@@ -1100,7 +1115,10 @@ mod tests {
             cur_path: String::from("/abc"),
         };
         let buf_mapper = mock_buf_mapper();
-        assert_eq!(expected, to_event(start_lang_server_msg, &buf_mapper).unwrap());
+        assert_eq!(
+            expected,
+            to_event(start_lang_server_msg, &buf_mapper).unwrap()
+        );
     }
 
     fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -1116,9 +1134,7 @@ mod tests {
             params: Value::from(vec![Value::from(1), Value::from("/abc/d.rs")]),
         };
         let text_document = to_text_document("/abc/d.rs").unwrap();
-        let expected = Event::InlayHints {
-            text_document,
-        };
+        let expected = Event::InlayHints { text_document };
         let buf_mapper = mock_buf_mapper();
 
         assert_eq!(expected, to_event(inlay_hints_msg, &buf_mapper).unwrap());
