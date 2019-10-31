@@ -3,11 +3,15 @@ use std::{
     error::Error,
     fmt,
     io::{BufRead, Write},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
 
+use bimap::BiMap;
 use crossbeam::channel::{self, Receiver, Sender};
 
 use lsp_types::{
@@ -34,7 +38,7 @@ use crate::rpc::{self, Message, RpcError};
 
 pub struct Neovim {
     rpc_client: rpc::Client<NvimMessage>,
-    event_receiver: Receiver<Event<BufferHandler>>,
+    event_receiver: Receiver<Event>,
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
@@ -160,7 +164,7 @@ where
     Ok(TextDocumentIdentifier::new(uri))
 }
 
-fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
+fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Event, EditorError> {
     log::debug!("Trying to convert msg: {:?} to event", msg);
     match msg {
         NvimMessage::RpcNotification { method, params } => {
@@ -192,9 +196,15 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     .map_err(|_e| EditorError::Parse("failed to parse hover params"))?;
 
                 let buf_id = BufferHandler(hover_params.0);
+                let text_document = hover_params.1;
+
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
+
                 Ok(Event::Hover {
-                    buf_id,
-                    text_document: hover_params.1,
+                    text_document,
                     position: hover_params.2,
                 })
             } else if method == "goto_definition" {
@@ -210,9 +220,15 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 let buf_id = BufferHandler(goto_definition_params.0);
+                let text_document = goto_definition_params.1;
+
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
+
                 Ok(Event::GotoDefinition {
-                    buf_id,
-                    text_document: goto_definition_params.1,
+                    text_document,
                     position: goto_definition_params.2,
                 })
             } else if method == "inlay_hints" {
@@ -227,10 +243,14 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     .map_err(|_e| EditorError::Parse("failed to parse inlay hints params"))?;
 
                 let buf_id = BufferHandler(inlay_hints_params.0);
-                Ok(Event::InlayHints {
-                    buf_id,
-                    text_document: inlay_hints_params.1,
-                })
+                let text_document = inlay_hints_params.1;
+
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
+
+                Ok(Event::InlayHints { text_document })
             } else if method == "format_doc" {
                 #[derive(Deserialize)]
                 struct FormatDocParams(
@@ -244,9 +264,15 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
                 let buf_id = BufferHandler(format_doc_params.0);
+                let text_document = format_doc_params.1;
+
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
+
                 Ok(Event::FormatDoc {
-                    buf_id,
-                    text_document: format_doc_params.1,
+                    text_document,
                     text_document_lines: format_doc_params.2,
                 })
             } else if method == "did_open" {
@@ -262,10 +288,12 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let text_document = did_open_params.1;
                 let buf_id = BufferHandler(did_open_params.0);
 
-                Ok(Event::DidOpen {
-                    buf_id,
-                    text_document,
-                })
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id.0, text_document.uri.clone());
+
+                Ok(Event::DidOpen { text_document })
 
             // Callback messages
             } else if method == "nvim_buf_lines_event" {
@@ -302,9 +330,16 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                     range_length: None,
                     text: buf_line_event.4.join("\n"),
                 };
+                let text_document = {
+                    let unlocked_buf_mapper = buf_mapper.lock().unwrap();
+                    let uri = unlocked_buf_mapper
+                        .get_by_left(&buf_handler.0)
+                        .ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
+                    TextDocumentIdentifier { uri: uri.clone() }
+                };
 
                 Ok(Event::DidChange {
-                    buf_id: buf_handler,
+                    text_document,
                     version,
                     content_change,
                 })
@@ -322,9 +357,15 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 }
                 let buf_handler = (buf_detach_event.0).0.unwrap_buf();
 
-                Ok(Event::DidClose {
-                    buf_id: buf_handler,
-                })
+                let text_document = {
+                    let unlocked_buf_mapper = buf_mapper.lock().unwrap();
+                    let uri = unlocked_buf_mapper
+                        .get_by_left(&buf_handler.0)
+                        .ok_or(EditorError::UnexpectedResponse("Unknown bufnr"))?;
+                    TextDocumentIdentifier { uri: uri.clone() }
+                };
+
+                Ok(Event::DidClose { text_document })
             } else if method == "references" {
                 #[derive(Deserialize)]
                 struct ReferencesParams(
@@ -338,10 +379,16 @@ fn to_event(msg: NvimMessage) -> Result<Event<BufferHandler>, EditorError> {
                 let references_params: ReferencesParams = Deserialize::deserialize(params)
                     .map_err(|_e| EditorError::Parse("failed to parse goto definition params"))?;
 
-                let buf_id = BufferHandler(references_params.0);
+                let buf_id = references_params.0;
+                let text_document = references_params.1;
+
+                buf_mapper
+                    .lock()
+                    .unwrap()
+                    .insert(buf_id, text_document.uri.clone());
+
                 Ok(Event::References {
-                    buf_id,
-                    text_document: references_params.1,
+                    text_document,
                     position: references_params.2,
                     include_declaration: references_params.3,
                 })
@@ -363,6 +410,9 @@ impl Neovim {
             channel::bounded::<(u64, Sender<NvimMessage>)>(16);
 
         let rpc_receiver = rpc_client.receiver.clone();
+        let buf_mapper = Arc::new(Mutex::new(BiMap::new()));
+        let buf_mapper_clone = Arc::clone(&buf_mapper);
+
         let thread = thread::spawn(move || {
             let mut subscriptions = Vec::<(u64, Sender<NvimMessage>)>::new();
 
@@ -379,7 +429,7 @@ impl Neovim {
                         log::error!("Received non-requested response: {}", msgid);
                     }
                 } else {
-                    match to_event(nvim_msg) {
+                    match to_event(nvim_msg, &buf_mapper_clone) {
                         Ok(event) => event_sender.send(event).unwrap(),
                         Err(e) => log::error!("Cannot convert nvim msg to editor event: {:?}", e),
                     }
@@ -520,7 +570,7 @@ impl BufferId for BufferHandler {}
 impl Editor for Neovim {
     type BufferId = BufferHandler;
 
-    fn events(&self) -> Receiver<Event<BufferHandler>> {
+    fn events(&self) -> Receiver<Event> {
         self.event_receiver.clone()
     }
 
@@ -981,6 +1031,10 @@ mod tests {
     use super::*;
     use lsp_types::{Position, Range, TextEdit};
 
+    fn mock_buf_mapper() -> Mutex<BiMap<i64, Url>> {
+        Mutex::new(BiMap::new())
+    }
+
     #[test]
     fn test_apply_edits() {
         let original_content = String::from("fn   a() {\n  print!(\"hello\");\n}");
@@ -1060,7 +1114,11 @@ mod tests {
             },
             cur_path: String::from("/abc"),
         };
-        assert_eq!(expected, to_event(start_lang_server_msg).unwrap());
+        let buf_mapper = mock_buf_mapper();
+        assert_eq!(
+            expected,
+            to_event(start_lang_server_msg, &buf_mapper).unwrap()
+        );
     }
 
     fn to_text_document(s: &str) -> Option<TextDocumentIdentifier> {
@@ -1076,12 +1134,10 @@ mod tests {
             params: Value::from(vec![Value::from(1), Value::from("/abc/d.rs")]),
         };
         let text_document = to_text_document("/abc/d.rs").unwrap();
-        let expected = Event::InlayHints {
-            buf_id: BufferHandler(1),
-            text_document,
-        };
+        let expected = Event::InlayHints { text_document };
+        let buf_mapper = mock_buf_mapper();
 
-        assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+        assert_eq!(expected, to_event(inlay_hints_msg, &buf_mapper).unwrap());
     }
 
     #[cfg(target_os = "windows")]
@@ -1092,12 +1148,10 @@ mod tests {
             params: Value::from(vec![Value::from(1), Value::from(r#"C:\\abc\d.rs"#)]),
         };
         let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
-        let expected = Event::InlayHints {
-            buf_id: BufferHandler(1),
-            text_document,
-        };
+        let expected = Event::InlayHints { text_document };
+        let buf_mapper = mock_buf_mapper();
 
-        assert_eq!(expected, to_event(inlay_hints_msg).unwrap());
+        assert_eq!(expected, to_event(inlay_hints_msg, &buf_mapper).unwrap());
     }
 
     #[test]

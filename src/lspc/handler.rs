@@ -33,6 +33,7 @@ pub struct LangSettings {
 }
 
 pub struct LangServerHandler<E: Editor> {
+    pub id: u64,
     pub lang_id: String,
     rpc_client: rpc::Client<LspMessage>,
     callbacks: Vec<Callback<E>>,
@@ -45,6 +46,7 @@ pub struct LangServerHandler<E: Editor> {
 
 impl<E: Editor> LangServerHandler<E> {
     pub fn new(
+        id: u64,
         lang_id: String,
         command: &String,
         lang_settings: LangSettings,
@@ -65,6 +67,7 @@ impl<E: Editor> LangServerHandler<E> {
         let rpc_client = rpc::Client::<LspMessage>::new(move || child_stdout, move || child_stdin);
 
         Ok(LangServerHandler {
+            id,
             rpc_client,
             lang_id,
             next_id: AtomicU64::new(1),

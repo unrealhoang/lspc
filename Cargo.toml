@@ -17,3 +17,4 @@ lsp-types = { version = "0.61.0", features = ["proposed"] }
 simple-logging = "*"
 url = "*"
 dirs = "2.0.2"
+bimap = "0.4"
