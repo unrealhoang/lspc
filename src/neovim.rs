@@ -1148,10 +1148,7 @@ mod tests {
             params: Value::from(vec![Value::from(1), Value::from(r#"C:\\abc\d.rs"#)]),
         };
         let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
-        let expected = Event::InlayHints {
-            buf_id: BufferHandler(1),
-            text_document,
-        };
+        let expected = Event::InlayHints { text_document };
         let buf_mapper = mock_buf_mapper();
 
         assert_eq!(expected, to_event(inlay_hints_msg, &buf_mapper).unwrap());
