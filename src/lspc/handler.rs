@@ -7,6 +7,7 @@ use std::{
 
 use crossbeam::channel::Receiver;
 use lsp_types::{
+    self as lsp,
     notification::{Initialized, Notification},
     request::Request,
     InitializeResult, ServerCapabilities,
@@ -84,6 +85,21 @@ impl<E: Editor> LangServerHandler<E> {
         file_path.starts_with(&self.root_path)
     }
 
+    pub fn sync_kind(&self) -> lsp::TextDocumentSyncKind {
+        if let Some(ref cap) = self.server_capabilities {
+            match cap.text_document_sync {
+                Some(lsp::TextDocumentSyncCapability::Kind(kind)) => return kind,
+                Some(lsp::TextDocumentSyncCapability::Options(ref opts)) => {
+                    if let Some(kind) = opts.change {
+                        return kind;
+                    }
+                }
+                _ => {}
+            }
+        }
+        lsp::TextDocumentSyncKind::Full
+    }
+
     fn send_msg(&self, msg: LspMessage) -> Result<(), LangServerError> {
         self.rpc_client
             .sender
@@ -126,12 +142,12 @@ impl<E: Editor> LangServerHandler<E> {
     pub fn initialized(&mut self) -> Result<(), LangServerError> {
         log::debug!("Sending initialized notification");
 
-        self.lsp_notify::<Initialized>(lsp_types::InitializedParams {})
+        self.lsp_notify::<Initialized>(&lsp_types::InitializedParams {})
     }
 
     pub fn lsp_request<R: Request>(
         &mut self,
-        params: R::Params,
+        params: &R::Params,
         cb: Box<dyn FnOnce(&mut E, &mut LangServerHandler<E>, R::Result) -> Result<(), LspcError>>,
     ) -> Result<(), LangServerError>
     where
@@ -142,7 +158,7 @@ impl<E: Editor> LangServerHandler<E> {
         log::debug!("Send LSP request: {} with {:?}", R::METHOD, params);
 
         let id = self.fetch_id();
-        let request = RawRequest::new::<R>(id, &params);
+        let request = RawRequest::new::<R>(id, params);
         let raw_callback: RawCallback<E> =
             Box::new(move |e, handler, raw_response: RawResponse| {
                 log::debug!("{} callback", R::METHOD);
@@ -158,11 +174,11 @@ impl<E: Editor> LangServerHandler<E> {
         self.send_msg(LspMessage::Request(request))
     }
 
-    pub fn lsp_notify<R: Notification>(&mut self, params: R::Params) -> Result<(), LangServerError>
+    pub fn lsp_notify<R: Notification>(&mut self, params: &R::Params) -> Result<(), LangServerError>
     where
         R::Params: Serialize + Debug,
     {
-        let noti = RawNotification::new::<R>(&params);
+        let noti = RawNotification::new::<R>(params);
         self.send_msg(LspMessage::Notification(noti))
     }
 }

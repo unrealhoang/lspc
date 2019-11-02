@@ -1,6 +1,7 @@
 pub mod handler;
 // Custom LSP types
 pub mod msg;
+mod tracking_file;
 pub mod types;
 
 use std::{
@@ -25,6 +26,7 @@ use url::Url;
 use self::{
     handler::{LangServerHandler, LangSettings},
     msg::{LspMessage, RawNotification, RawRequest, RawResponse},
+    tracking_file::TrackingFile,
     types::{InlayHint, InlayHints, InlayHintsParams},
 };
 
@@ -185,97 +187,6 @@ pub trait Editor: 'static {
     ) -> Result<(), EditorError>;
 }
 
-struct DelayedSync {
-    scheduled_at: Option<Instant>,
-    sync_content: lsp::DidChangeTextDocumentParams,
-}
-
-impl DelayedSync {
-    fn new(uri: Url) -> Self {
-        DelayedSync {
-            scheduled_at: None,
-            sync_content: lsp::DidChangeTextDocumentParams {
-                text_document: lsp::VersionedTextDocumentIdentifier {
-                    uri: uri,
-                    version: None,
-                },
-                content_changes: Vec::new(),
-            },
-        }
-    }
-
-    fn update_sync_content(
-        &mut self,
-        version: i64,
-        content_change: lsp::TextDocumentContentChangeEvent,
-    ) {
-        self.sync_content.text_document.version = Some(version);
-        let last_content_change = self.sync_content.content_changes.iter_mut().last();
-        if let Some(last_content_change) = last_content_change {
-            if last_content_change.range == content_change.range {
-                std::mem::replace(last_content_change, content_change);
-            } else {
-                self.sync_content.content_changes.push(content_change);
-            }
-        } else {
-            self.sync_content.content_changes.push(content_change);
-        }
-    }
-}
-
-struct TrackingFile {
-    handler_id: u64,
-    text_document: TextDocumentIdentifier,
-    delayed_sync: DelayedSync,
-    sent_did_open: bool,
-}
-
-impl TrackingFile {
-    fn new(handler_id: u64, text_document: TextDocumentIdentifier) -> Self {
-        TrackingFile {
-            handler_id,
-            delayed_sync: DelayedSync::new(text_document.uri.clone()),
-            text_document,
-            sent_did_open: false,
-        }
-    }
-
-    fn sync_pending_changes<E: Editor>(
-        &mut self,
-        lsp_handler: &mut LangServerHandler<E>,
-    ) -> Result<(), LspcError> {
-        let mut sync_content = lsp::DidChangeTextDocumentParams {
-            text_document: lsp::VersionedTextDocumentIdentifier {
-                uri: self.delayed_sync.sync_content.text_document.uri.clone(),
-                version: self.delayed_sync.sync_content.text_document.version,
-            },
-            content_changes: Vec::new(),
-        };
-        std::mem::swap(&mut self.delayed_sync.sync_content, &mut sync_content);
-
-        if !sync_content.content_changes.is_empty() {
-            lsp_handler.lsp_notify::<noti::DidChangeTextDocument>(sync_content)?;
-            self.delayed_sync.scheduled_at = None;
-        }
-
-        Ok(())
-    }
-
-    fn delay_sync_in(
-        &mut self,
-        duration: Duration,
-        version: i64,
-        content_change: lsp::TextDocumentContentChangeEvent,
-    ) {
-        if let None = self.delayed_sync.scheduled_at {
-            self.delayed_sync.scheduled_at = Some(Instant::now() + duration);
-        }
-
-        self.delayed_sync
-            .update_sync_content(version, content_change);
-    }
-}
-
 pub struct Lspc<E: Editor> {
     editor: E,
     lsp_handlers: Vec<LangServerHandler<E>>,
@@ -414,7 +325,7 @@ impl<E: Editor> Lspc<E> {
                     workspace_folders: None,
                 };
                 lsp_handler.lsp_request::<Initialize>(
-                    init_params,
+                    &init_params,
                     Box::new(|editor: &mut E, handler, response| {
                         handler.initialize_response(response)?;
 
@@ -441,7 +352,7 @@ impl<E: Editor> Lspc<E> {
                     position,
                 };
                 handler.lsp_request::<HoverRequest>(
-                    params,
+                    &params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(hover) = response {
                             editor.show_hover(&text_document_clone, &hover)?;
@@ -464,7 +375,7 @@ impl<E: Editor> Lspc<E> {
                     position,
                 };
                 handler.lsp_request::<GotoDefinition>(
-                    params,
+                    &params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(definition) = response {
                             match definition {
@@ -495,7 +406,7 @@ impl<E: Editor> Lspc<E> {
                 let text_document_clone = text_document.clone();
                 let params = InlayHintsParams { text_document };
                 handler.lsp_request::<InlayHints>(
-                    params,
+                    &params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         editor.inline_hints(&text_document_clone, &response)?;
 
@@ -522,7 +433,7 @@ impl<E: Editor> Lspc<E> {
                     options,
                 };
                 handler.lsp_request::<Formatting>(
-                    params,
+                    &params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(edits) = response {
                             editor.apply_edits(&text_document_lines, &edits)?;
@@ -553,7 +464,7 @@ impl<E: Editor> Lspc<E> {
                 };
 
                 handler.lsp_request::<References>(
-                    params,
+                    &params,
                     Box::new(move |editor: &mut E, _handler, response| {
                         if let Some(locations) = response {
                             editor.show_references(&locations)?;
@@ -573,7 +484,7 @@ impl<E: Editor> Lspc<E> {
                 self.editor.watch_file_events(&text_document)?;
                 self.tracking_files.insert(
                     text_document.uri.clone(),
-                    TrackingFile::new(handler.id, text_document.clone()),
+                    TrackingFile::new(handler.id, text_document.uri, handler.sync_kind()),
                 );
             }
             Event::DidChange {
@@ -581,6 +492,12 @@ impl<E: Editor> Lspc<E> {
                 version,
                 content_change,
             } => {
+                log::debug!(
+                    "Received did change event: {:?}, {}, {:?}",
+                    text_document,
+                    version,
+                    content_change
+                );
                 let (handler, tracking_file, _) =
                     self.handler_for_file(&text_document.uri).ok_or_else(|| {
                         log::info!(
@@ -590,11 +507,13 @@ impl<E: Editor> Lspc<E> {
                         MainLoopError::IgnoredMessage
                     })?;
 
+                tracking_file.track_change(version, &content_change);
+
                 if !tracking_file.sent_did_open {
                     handler.lsp_notify::<noti::DidOpenTextDocument>(
-                        lsp::DidOpenTextDocumentParams {
+                        &lsp::DidOpenTextDocumentParams {
                             text_document: lsp::TextDocumentItem {
-                                uri: tracking_file.text_document.uri.clone(),
+                                uri: text_document.uri.clone(),
                                 language_id: handler.lang_id.clone(),
                                 version,
                                 text: content_change.text,
@@ -603,11 +522,7 @@ impl<E: Editor> Lspc<E> {
                     )?;
                     tracking_file.sent_did_open = true;
                 } else {
-                    tracking_file.delay_sync_in(
-                        Duration::from_millis(SYNC_DELAY_MS),
-                        version,
-                        content_change,
-                    );
+                    tracking_file.delay_sync_in(Duration::from_millis(SYNC_DELAY_MS));
                 }
             }
             Event::DidClose { text_document } => {
@@ -620,10 +535,13 @@ impl<E: Editor> Lspc<E> {
                         MainLoopError::IgnoredMessage
                     })?;
 
-                tracking_file.sync_pending_changes(handler)?;
+                let pending_changes = tracking_file.fetch_pending_changes();
+                if let Some(params) = pending_changes {
+                    handler.lsp_notify::<noti::DidChangeTextDocument>(&params)?;
+                }
                 handler.lsp_notify::<noti::DidCloseTextDocument>(
-                    lsp::DidCloseTextDocumentParams {
-                        text_document: tracking_file.text_document.clone(),
+                    &lsp::DidCloseTextDocumentParams {
+                        text_document: text_document,
                     },
                 )?;
             }
@@ -666,7 +584,7 @@ impl<E: Editor> Lspc<E> {
             .tracking_files
             .iter()
             .filter(|(_, buf)| {
-                if let Some(instant) = buf.delayed_sync.scheduled_at {
+                if let Some(instant) = buf.scheduled_sync_at {
                     instant <= now
                 } else {
                     false
@@ -682,7 +600,10 @@ impl<E: Editor> Lspc<E> {
                 log::info!("Received changed event for nontracking file: {:?}", uri);
                 MainLoopError::IgnoredMessage
             })?;
-            tracking_file.sync_pending_changes(handler)?;
+            let pending_changes = tracking_file.fetch_pending_changes();
+            if let Some(params) = pending_changes {
+                handler.lsp_notify::<noti::DidChangeTextDocument>(&params)?;
+            }
         }
         Ok(())
     }
