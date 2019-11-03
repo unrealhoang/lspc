@@ -720,6 +720,8 @@ impl Editor for Neovim {
         _text_document: &TextDocumentIdentifier,
     ) -> Result<(), EditorError> {
         // FIXME: check current buffer is `text_document`
+        //
+        // nvim_buf_attach({buffer}, {send_buffer}, {opts})
         #[derive(Serialize)]
         struct AttachBufParams(i64, bool, HashMap<(), ()>);
 
@@ -1126,28 +1128,18 @@ mod tests {
         Some(TextDocumentIdentifier::new(uri))
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_deserialize_inlay_hints_params() {
+        #[cfg(not(target_os = "windows"))]
+        let file_path = "/a/b/c/d";
+        #[cfg(target_os = "windows")]
+        let file_path = r#"C:\\a\b\d"#;
+
         let inlay_hints_msg = NvimMessage::RpcNotification {
             method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from(1), Value::from("/abc/d.rs")]),
+            params: Value::from(vec![Value::from(1), Value::from(file_path)]),
         };
-        let text_document = to_text_document("/abc/d.rs").unwrap();
-        let expected = Event::InlayHints { text_document };
-        let buf_mapper = mock_buf_mapper();
-
-        assert_eq!(expected, to_event(inlay_hints_msg, &buf_mapper).unwrap());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_deserialize_inlay_hints_params() {
-        let inlay_hints_msg = NvimMessage::RpcNotification {
-            method: String::from("inlay_hints"),
-            params: Value::from(vec![Value::from(1), Value::from(r#"C:\\abc\d.rs"#)]),
-        };
-        let text_document = to_text_document(r#"C:\\abc\d.rs"#).unwrap();
+        let text_document = to_text_document(file_path).unwrap();
         let expected = Event::InlayHints { text_document };
         let buf_mapper = mock_buf_mapper();
 
