@@ -1,10 +1,11 @@
 use lsp_types::{self as lsp};
 use std::time::{Duration, Instant};
 use url::Url;
+use ropey::Rope;
 
 enum SyncData {
     Incremental(lsp::DidChangeTextDocumentParams),
-    Full(Vec<String>),
+    Full(Rope),
     None,
 }
 
@@ -30,7 +31,7 @@ impl TrackingFile {
                     content_changes: Vec::new(),
                 })
             }
-            lsp::TextDocumentSyncKind::Full => SyncData::Full(Vec::new()),
+            lsp::TextDocumentSyncKind::Full => SyncData::Full(Rope::new()),
         };
 
         TrackingFile {
@@ -51,7 +52,7 @@ impl TrackingFile {
         self.version = version;
         match self.sync_data {
             SyncData::Incremental(ref mut changes) => {
-                if content_change.range.unwrap().start.line as i64 == -1 {
+                if content_change.range.is_none() {
                     return;
                 }
                 let last_content_change = changes.content_changes.iter_mut().last();
@@ -66,20 +67,21 @@ impl TrackingFile {
                 }
             }
             SyncData::Full(ref mut content) => {
-                let mut start_line = content_change.range.unwrap().start.line as usize;
-                let end_line = content_change.range.unwrap().end.line as isize;
-
-                if end_line == -1 {
-                    content.clear();
-                    content.extend(content_change.text.split("\n").map(ToOwned::to_owned));
+                println!("Before sync content: {:?}", content);
+                println!("Sync content change: {:?}", content_change);
+                if content_change.range.is_none() {
+                    let new_rope = Rope::from_str(&content_change.text);
+                    std::mem::replace(content, new_rope);
                 } else {
+                    let start_line = content_change.range.unwrap().start.line as usize;
+                    let end_line = content_change.range.unwrap().end.line as isize;
                     let end_line = end_line as usize;
-                    content.drain(start_line..end_line);
-                    for new_line in content_change.text.split("\n").map(ToOwned::to_owned) {
-                        content.insert(start_line, new_line);
-                        start_line += 1;
-                    }
+                    let start_char = content.line_to_char(start_line);
+                    let end_char  = content.line_to_char(end_line);
+                    content.remove(start_char..end_char);
+                    content.insert(start_char, &content_change.text);
                 }
+                println!("After sync content: {:?}", content);
             }
             SyncData::None => {}
         }
@@ -110,8 +112,7 @@ impl TrackingFile {
                     .push(lsp::TextDocumentContentChangeEvent {
                         range: None,
                         range_length: None,
-                        // FIXME: use client config separator
-                        text: content.join("\n"),
+                        text: content.to_string()
                     });
                 Some(sync_content)
             }
@@ -142,18 +143,9 @@ mod test {
             lsp::TextDocumentSyncKind::Full,
         );
         let change_event = lsp::TextDocumentContentChangeEvent {
-            range: Some(lsp::Range {
-                start: lsp::Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: lsp::Position {
-                    line: 18446744073709551615,
-                    character: 0,
-                },
-            }),
+            range: None,
             range_length: None,
-            text: "1".to_owned(),
+            text: "".to_owned(),
         };
 
         tracking_file.track_change(5, &change_event);
@@ -168,6 +160,54 @@ mod test {
         );
         assert_eq!(5, sync_request.text_document.version.unwrap());
         assert_eq!(1, sync_request.content_changes.len());
-        assert_eq!("1", sync_request.content_changes[0].text);
+        assert_eq!("", sync_request.content_changes[0].text);
+
+        // Two lines added
+        // nvim_buf_lines_event[{buf}, {changedtick}, 0, 0, ["line1", "line2", "line3"], v:false]
+        let change_event = lsp::TextDocumentContentChangeEvent {
+            range: Some(lsp::Range {
+                start: lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: lsp::Position {
+                    line: 0,
+                    character: 0,
+                },
+            }),
+            range_length: None,
+            text: "line1\nline2\nline3".to_owned(),
+        };
+        tracking_file.track_change(6, &change_event);
+
+        let sync_request = tracking_file.fetch_pending_changes().unwrap();
+
+        assert_eq!(6, sync_request.text_document.version.unwrap());
+        assert_eq!(1, sync_request.content_changes.len());
+        assert_eq!("line1\nline2\nline3", sync_request.content_changes[0].text);
+
+        // Remove two lines
+        // nvim_buf_lines_event[{buf}, {changedtick}, 1, 3, [], v:false]
+        let change_event = lsp::TextDocumentContentChangeEvent {
+            range: Some(lsp::Range {
+                start: lsp::Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: lsp::Position {
+                    line: 3,
+                    character: 0,
+                },
+            }),
+            range_length: None,
+            text: "".to_owned(),
+        };
+        tracking_file.track_change(7, &change_event);
+
+        let sync_request = tracking_file.fetch_pending_changes().unwrap();
+
+        assert_eq!(7, sync_request.text_document.version.unwrap());
+        assert_eq!(1, sync_request.content_changes.len());
+        assert_eq!("line1\n", sync_request.content_changes[0].text);
     }
 }

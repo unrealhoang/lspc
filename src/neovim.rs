@@ -322,11 +322,16 @@ fn to_event(msg: NvimMessage, buf_mapper: &Mutex<BiMap<i64, Url>>) -> Result<Eve
 
                 let buf_handler = buf_line_event.0.unwrap_buf();
                 let version = buf_line_event.1.unwrap();
-                let content_change = lsp::TextDocumentContentChangeEvent {
-                    range: Some(lsp::Range {
+                let range = if buf_line_event.3 == -1 {
+                    None
+                } else {
+                    Some(lsp::Range {
                         start: lsp::Position::new(buf_line_event.2 as u64, 0),
                         end: lsp::Position::new(buf_line_event.3 as u64, 0),
-                    }),
+                    })
+                };
+                let content_change = lsp::TextDocumentContentChangeEvent {
+                    range,
                     range_length: None,
                     text: buf_line_event.4.join("\n"),
                 };
