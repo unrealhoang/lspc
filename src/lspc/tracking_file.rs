@@ -1,7 +1,7 @@
 use lsp_types::{self as lsp};
+use ropey::Rope;
 use std::time::{Duration, Instant};
 use url::Url;
-use ropey::Rope;
 
 enum SyncData {
     Incremental(lsp::DidChangeTextDocumentParams),
@@ -77,7 +77,7 @@ impl TrackingFile {
                     let end_line = content_change.range.unwrap().end.line as isize;
                     let end_line = end_line as usize;
                     let start_char = content.line_to_char(start_line);
-                    let end_char  = content.line_to_char(end_line);
+                    let end_char = content.line_to_char(end_line);
                     content.remove(start_char..end_char);
                     content.insert(start_char, &content_change.text);
                 }
@@ -112,7 +112,7 @@ impl TrackingFile {
                     .push(lsp::TextDocumentContentChangeEvent {
                         range: None,
                         range_length: None,
-                        text: content.to_string()
+                        text: content.to_string(),
                     });
                 Some(sync_content)
             }
