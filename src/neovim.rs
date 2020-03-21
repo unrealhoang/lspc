@@ -28,7 +28,7 @@ use rmpv::{
 use serde::{
     self,
     de::{self, SeqAccess, Visitor},
-    ser::SerializeSeq,
+    ser::{SerializeMap, SerializeSeq},
     Deserialize, Serialize,
 };
 use url::Url;
@@ -42,6 +42,7 @@ pub struct Neovim {
     next_id: AtomicU64,
     subscription_sender: Sender<(u64, Sender<NvimMessage>)>,
     thread: JoinHandle<()>,
+    buf_mapper: Arc<Mutex<BiMap<i64, Url>>>
 }
 
 pub trait ToDisplay {
@@ -448,6 +449,7 @@ impl Neovim {
             event_receiver,
             rpc_client,
             thread,
+            buf_mapper,
         }
     }
 
@@ -498,7 +500,7 @@ impl Neovim {
             .map_err(|_| EditorError::Timeout)
     }
 
-    pub fn notify(&self, method: &str, params: &[Value]) -> Result<(), EditorError> {
+    pub fn notify(&self, method: &str, params: Value) -> Result<(), EditorError> {
         let noti = NvimMessage::RpcNotification {
             method: method.into(),
             params: Value::from(params.to_owned()),
@@ -549,13 +551,14 @@ impl Neovim {
             .into();
         self.notify(
             "nvim_buf_set_virtual_text",
-            &vec![
+            vec![
                 buffer_id.into(),
                 ns_id.into(),
                 line.into(),
                 chunks,
                 Value::Map(Vec::new()),
-            ],
+            ]
+            .into(),
         )?;
 
         Ok(())
@@ -602,6 +605,13 @@ impl Editor for Neovim {
         let params = vec![Value::from("echo 'hello from the other side'")].into();
         self.request("nvim_command", params)
             .map_err(|_| EditorError::Timeout)?;
+
+        Ok(())
+    }
+
+    fn init(&mut self) -> Result<(), EditorError> {
+        // FIXME: call `nvim_set_client_info` here.
+        // FIXME: call `sign_define` here.
 
         Ok(())
     }
@@ -711,6 +721,74 @@ impl Editor for Neovim {
             "lspc#command#open_reference_preview",
             Value::Array(vec![items.into()]),
         )?;
+
+        Ok(())
+    }
+
+    fn show_diagnostics(
+        &mut self,
+        text_document: &TextDocumentIdentifier,
+        diagnostics: &[lsp::Diagnostic],
+    ) -> Result<(), EditorError> {
+        struct Placement {
+            lnum: i64,
+            priority: i64,
+        }
+
+        impl Serialize for Placement {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let mut s = serializer.serialize_map(Some(2))?;
+                s.serialize_entry("lnum", &self.lnum)?;
+                s.serialize_entry("priority", &self.priority)?;
+                s.end()
+            }
+        }
+
+        let buf_id = {
+            let locked_buf_mapper = self.buf_mapper.lock().unwrap();
+            *locked_buf_mapper.get_by_right(&text_document.uri)
+                .ok_or_else(|| EditorError::Failed(format!("Buffer not found for {:?}", text_document)))?
+        };
+
+        self.notify(
+            "nvim_call_function",
+            vec![
+                Value::from("sign_unplace"),
+                vec![
+                    Value::from("lspc-diag"),
+                    Value::Map(vec![(Value::from("buffer"), Value::from(buf_id))]),
+                ].into(),
+            ].into(),
+        )?;
+
+        #[derive(Serialize)]
+        struct SignParams(i64, String, String, i64, Placement);
+        for diag in diagnostics {
+            let sign_name = match diag.severity {
+                Some(lsp::DiagnosticSeverity::Error) => "ALEErrorSign",
+                Some(lsp::DiagnosticSeverity::Warning) => "ALEWarningSign",
+                Some(lsp::DiagnosticSeverity::Information)
+                | Some(lsp::DiagnosticSeverity::Hint) => "ALEInfoSign",
+                None => "ALEErrorSign",
+            };
+            let placement = Placement {
+                lnum: diag.range.start.line as i64,
+                priority: 10,
+            };
+            let sign_params =
+                SignParams(0, "lspc-diag".into(), sign_name.into(), buf_id, placement);
+
+            let params = to_value(sign_params).map_err(|e| {
+                EditorError::Failed(format!("Failed to encode params: {}", e.description()))
+            })?;
+            self.notify(
+                "nvim_call_function",
+                vec![Value::from("sign_place"), params].into(),
+            )?;
+        }
 
         Ok(())
     }
